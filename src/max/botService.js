@@ -49,6 +49,85 @@ function normalizeCommand(text) {
   };
 }
 
+const COMMAND_ALIASES = {
+  start: "start",
+  "старт": "start",
+  help: "help",
+  "помощь": "help",
+  "меню": "help",
+  "кнопки": "help",
+  groups: "groups",
+  "группы": "groups",
+  setgroup: "setgroup",
+  "группа": "setgroup",
+  mygroup: "mygroup",
+  "моягруппа": "mygroup",
+  "моя_группа": "mygroup",
+  today: "today",
+  "сегодня": "today",
+  tomorrow: "tomorrow",
+  "завтра": "tomorrow",
+  date: "date",
+  "дата": "date",
+  next: "next",
+  "следующая": "next",
+  "следующий": "next",
+  "ближайшая": "next",
+  sync: "sync",
+  "синк": "sync",
+  "обновить": "sync"
+};
+
+function resolveCommandAlias(command) {
+  return COMMAND_ALIASES[command] || command;
+}
+
+const CALLBACK_ACTIONS = {
+  today: "today",
+  tomorrow: "tomorrow",
+  next: "next",
+  mygroup: "mygroup",
+  groups: "groups",
+  help: "help",
+  sync: "sync"
+};
+
+function callbackButton(text, action) {
+  return {
+    type: "callback",
+    text,
+    payload: `cmd:${action}`
+  };
+}
+
+function parseCallbackCommand(payload) {
+  if (!payload) return "";
+
+  if (typeof payload === "object") {
+    const nested = payload.command || payload.cmd || payload.action || payload.payload || "";
+    return parseCallbackCommand(nested);
+  }
+
+  const raw = String(payload).trim();
+  if (!raw) return "";
+
+  if (raw.startsWith("{") && raw.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(raw);
+      const nested = parsed?.command || parsed?.cmd || parsed?.action || "";
+      return parseCallbackCommand(nested);
+    } catch (error) {
+      return "";
+    }
+  }
+
+  if (raw.startsWith("cmd:")) {
+    return raw.slice(4).trim().toLowerCase();
+  }
+
+  return raw.toLowerCase();
+}
+
 function isIsoDate(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value || "")) return false;
   const date = new Date(`${value}T00:00:00Z`);
@@ -135,12 +214,16 @@ class MaxBotService {
       return;
     }
 
+    if (update.update_type === "message_callback") {
+      await this.handleMessageCallbackUpdate(update);
+      return;
+    }
+
     if (update.update_type !== "message_created") return;
 
-    const sender = update?.message?.sender;
-    if (!sender?.user_id) return;
-
-    if (sender.is_bot === true) return;
+    const senderId = this.resolveSenderId(update);
+    if (!senderId) return;
+    if (update?.message?.sender?.is_bot === true) return;
 
     const text = extractMessageText(update);
     if (!text) return;
@@ -154,7 +237,28 @@ class MaxBotService {
     const { command, args } = normalizeCommand(text);
     if (!command) return;
 
-    await this.handleCommand({ command, args, senderId: String(sender.user_id), target });
+    await this.handleCommand({ command, args, senderId, target });
+  }
+
+  /**
+   * Resolve sender user ID from message or callback update payload.
+   *
+   * @param {Record<string, any>} update
+   * @returns {string}
+   */
+  resolveSenderId(update) {
+    const senderIdCandidates = [
+      update?.message?.sender?.user_id,
+      update?.callback?.user?.user_id,
+      update?.callback?.sender?.user_id,
+      update?.user?.user_id
+    ];
+
+    for (const value of senderIdCandidates) {
+      if (value !== undefined && value !== null) return String(value);
+    }
+
+    return "";
   }
 
   /**
@@ -164,7 +268,8 @@ class MaxBotService {
    * @returns {{chatId?: string|number, userId?: string|number}|null}
    */
   resolveTarget(update) {
-    const recipient = update?.message?.recipient || {};
+    const recipient =
+      update?.message?.recipient || update?.callback?.message?.recipient || update?.recipient || {};
 
     if (recipient.chat_id !== undefined && recipient.chat_id !== null) {
       return { chatId: recipient.chat_id };
@@ -179,6 +284,17 @@ class MaxBotService {
       return { userId: senderId };
     }
 
+    const callbackChatId = update?.callback?.chat_id || update?.callback?.chat?.chat_id;
+    if (callbackChatId !== undefined && callbackChatId !== null) {
+      return { chatId: callbackChatId };
+    }
+
+    const callbackUserId =
+      update?.callback?.user?.user_id || update?.callback?.sender?.user_id || update?.user?.user_id;
+    if (callbackUserId !== undefined && callbackUserId !== null) {
+      return { userId: callbackUserId };
+    }
+
     return null;
   }
 
@@ -187,16 +303,20 @@ class MaxBotService {
    *
    * @param {{chatId?: string|number, userId?: string|number}} target
    * @param {string} text
+   * @param {{attachments?: Array<Record<string, any>>}} [options]
    * @returns {Promise<void>}
    */
-  async sendText(target, text) {
+  async sendText(target, text, options = {}) {
+    const attachments = Array.isArray(options.attachments) ? options.attachments : undefined;
     const chunks = splitLongMessage(text);
-    for (const chunk of chunks) {
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index];
       await this.api.sendText({
         userId: target.userId,
         chatId: target.chatId,
         text: chunk,
-        format: "markdown"
+        format: "markdown",
+        attachments: index === 0 ? attachments : undefined
       });
     }
   }
@@ -213,13 +333,34 @@ class MaxBotService {
     const userId = update?.user?.user_id;
 
     if (chatId !== undefined && chatId !== null) {
-      await this.api.sendText({ chatId, text });
+      await this.sendText({ chatId }, text, { attachments: this.mainMenuKeyboard() });
       return;
     }
 
     if (userId !== undefined && userId !== null) {
-      await this.api.sendText({ userId, text });
+      await this.sendText({ userId }, text, { attachments: this.mainMenuKeyboard() });
     }
+  }
+
+  /**
+   * Build inline keyboard attachment with quick actions.
+   *
+   * @returns {Array<Record<string, any>>}
+   */
+  mainMenuKeyboard() {
+    return [
+      {
+        type: "inline_keyboard",
+        payload: {
+          buttons: [
+            [callbackButton("Сегодня", "today"), callbackButton("Завтра", "tomorrow")],
+            [callbackButton("Следующая пара", "next"), callbackButton("Моя группа", "mygroup")],
+            [callbackButton("Группы", "groups"), callbackButton("Обновить", "sync")],
+            [callbackButton("Помощь", "help")]
+          ]
+        }
+      }
+    ];
   }
 
   /**
@@ -229,19 +370,63 @@ class MaxBotService {
    */
   helpMessage() {
     return [
-      "Hello! I am your OmAcademy schedule bot.",
+      "Привет! Я бот расписания OmAcademy.",
+      "Используйте команды или кнопки ниже.",
       "",
-      "Commands:",
-      "- `/help` - show this help",
-      "- `/groups [query]` - list groups (optionally filtered)",
-      "- `/setgroup <groupCode|groupName>` - set your default group",
-      "- `/mygroup` - show your current default group",
-      "- `/today [groupCode|groupName]` - schedule for today",
-      "- `/tomorrow [groupCode|groupName]` - schedule for tomorrow",
-      "- `/date <YYYY-MM-DD> [groupCode|groupName]` - schedule for a date",
-      "- `/next [groupCode|groupName]` - next lesson from today onward",
-      "- `/sync` - force manual sync (admin only)"
+      "Команды:",
+      "- `/помощь` (`/help`) - показать это меню",
+      "- `/группы [поиск]` (`/groups`) - список групп",
+      "- `/группа <код|название>` (`/setgroup`) - сохранить группу по умолчанию",
+      "- `/моягруппа` (`/mygroup`) - текущая группа по умолчанию",
+      "- `/сегодня [код|название]` (`/today`) - расписание на сегодня",
+      "- `/завтра [код|название]` (`/tomorrow`) - расписание на завтра",
+      "- `/дата <YYYY-MM-DD> [код|название]` (`/date`) - расписание на дату",
+      "- `/следующая [код|название]` (`/next`) - ближайшая пара",
+      "- `/обновить` (`/sync`) - принудительный sync (только admin)"
     ].join("\n");
+  }
+
+  /**
+   * Handle callback updates generated by inline keyboard buttons.
+   *
+   * @param {Record<string, any>} update
+   * @returns {Promise<void>}
+   */
+  async handleMessageCallbackUpdate(update) {
+    const callbackId = update?.callback?.callback_id || update?.callback_id;
+    if (!callbackId) return;
+
+    const senderId = this.resolveSenderId(update);
+    const target = this.resolveTarget(update);
+    if (!senderId || !target) {
+      await this.safeAnswerCallback(callbackId, "Не удалось обработать кнопку.");
+      return;
+    }
+
+    const command = parseCallbackCommand(update?.callback?.payload || update?.payload);
+    const resolvedCommand = CALLBACK_ACTIONS[command];
+    if (!resolvedCommand) {
+      await this.safeAnswerCallback(callbackId, "Неизвестная кнопка.");
+      return;
+    }
+
+    await this.safeAnswerCallback(callbackId, "Готово");
+    await this.handleCommand({ command: resolvedCommand, args: [], senderId, target });
+  }
+
+  /**
+   * Send callback acknowledgement without interrupting update processing on API errors.
+   *
+   * @param {string} callbackId
+   * @param {string} notification
+   * @returns {Promise<void>}
+   */
+  async safeAnswerCallback(callbackId, notification) {
+    try {
+      await this.api.answerCallback({ callbackId, notification });
+    } catch (error) {
+      this.logger.warn("MAX callback answer failed", { error: error.message });
+    }
   }
 
   /**
@@ -251,10 +436,12 @@ class MaxBotService {
    * @returns {Promise<void>}
    */
   async handleCommand({ command, args, senderId, target }) {
-    switch (command) {
+    const resolvedCommand = resolveCommandAlias(command);
+
+    switch (resolvedCommand) {
       case "start":
       case "help":
-        await this.sendText(target, this.helpMessage());
+        await this.sendText(target, this.helpMessage(), { attachments: this.mainMenuKeyboard() });
         return;
 
       case "groups":
@@ -295,7 +482,7 @@ class MaxBotService {
         return;
 
       default:
-        await this.sendText(target, "Unknown command. Use `/help`.");
+        await this.sendText(target, "Неизвестная команда. Используйте `/помощь`.");
     }
   }
 
@@ -318,7 +505,7 @@ class MaxBotService {
   async resolveGroup(senderId, rawGroupInput) {
     const groups = await this.getActiveGroups();
     if (!groups.length) {
-      return { error: "No active schedule snapshot found yet. Run `/sync` first." };
+      return { error: "Активное расписание пока не загружено. Выполните `/обновить`." };
     }
 
     let input = (rawGroupInput || "").trim();
@@ -328,7 +515,7 @@ class MaxBotService {
       if (!pref?.preferredGroupCode) {
         return {
           error:
-            "Group is not provided. Use `/setgroup <groupCode|groupName>` or pass group in command."
+            "Группа не указана. Используйте `/группа <код|название>` или передайте группу в команде."
         };
       }
       input = pref.preferredGroupCode;
@@ -348,14 +535,14 @@ class MaxBotService {
 
     if (byNameContains.length > 1) {
       return {
-        error: `Ambiguous group. Matches: ${byNameContains
+        error: `Слишком много совпадений. Подходят: ${byNameContains
           .slice(0, 10)
           .map((g) => `${g.code} (${g.name})`)
           .join(", ")}`
       };
     }
 
-    return { error: `Group not found: ${input}` };
+    return { error: `Группа не найдена: ${input}` };
   }
 
   /**
@@ -368,7 +555,7 @@ class MaxBotService {
   async handleGroupsCommand(target, args) {
     const groups = await this.getActiveGroups();
     if (!groups.length) {
-      await this.sendText(target, "No active groups found. Run `/sync` first.");
+      await this.sendText(target, "Нет активных групп. Сначала выполните `/обновить`.");
       return;
     }
 
@@ -378,16 +565,16 @@ class MaxBotService {
       : groups;
 
     if (!filtered.length) {
-      await this.sendText(target, "No groups found for this query.");
+      await this.sendText(target, "По вашему запросу группы не найдены.");
       return;
     }
 
     const limit = query ? 80 : 40;
     const lines = filtered.slice(0, limit).map((g) => `- ${g.code} - ${g.name}`);
 
-    let result = `Groups found: ${filtered.length}\n\n${lines.join("\n")}`;
+    let result = `Найдено групп: ${filtered.length}\n\n${lines.join("\n")}`;
     if (filtered.length > limit) {
-      result += `\n\nShowing first ${limit}. Use /groups <query> to narrow results.`;
+      result += `\n\nПоказаны первые ${limit}. Уточните запрос: /группы <текст>.`;
     }
 
     await this.sendText(target, result);
@@ -404,7 +591,7 @@ class MaxBotService {
   async handleSetGroupCommand(target, senderId, args) {
     const input = args.join(" ").trim();
     if (!input) {
-      await this.sendText(target, "Usage: `/setgroup <groupCode|groupName>`");
+      await this.sendText(target, "Использование: `/группа <код|название>`");
       return;
     }
 
@@ -417,7 +604,7 @@ class MaxBotService {
     await this.userPrefsRepository.setPreferredGroup(senderId, resolved.group);
     await this.sendText(
       target,
-      `Default group saved: ${resolved.group.name} (code: ${resolved.group.code})`
+      `Группа по умолчанию сохранена: ${resolved.group.name} (код: ${resolved.group.code})`
     );
   }
 
@@ -431,13 +618,13 @@ class MaxBotService {
   async handleMyGroupCommand(target, senderId) {
     const pref = await this.userPrefsRepository.getByUserId(senderId);
     if (!pref?.preferredGroupCode) {
-      await this.sendText(target, "Default group is not set. Use `/setgroup <groupCode|groupName>`." );
+      await this.sendText(target, "Группа по умолчанию не задана. Используйте `/группа <код|название>`.");
       return;
     }
 
     await this.sendText(
       target,
-      `Your default group: ${pref.preferredGroupName} (code: ${pref.preferredGroupCode})`
+      `Ваша группа по умолчанию: ${pref.preferredGroupName} (код: ${pref.preferredGroupCode})`
     );
   }
 
@@ -450,16 +637,16 @@ class MaxBotService {
    * @returns {string}
    */
   formatLessonsForDay(group, isoDate, lessons) {
-    const header = `${group.name} (${group.code})\nDate: ${toRuDate(isoDate)}`;
+    const header = `${group.name} (${group.code})\nДата: ${toRuDate(isoDate)}`;
 
     if (!lessons.length) {
-      return `${header}\n\nNo lessons found.`;
+      return `${header}\n\nПар не найдено.`;
     }
 
     const lines = lessons.map((lesson) => {
       const teacher = lesson.teacher || "-";
       const room = lesson.room || "-";
-      return `${lesson.lessonNumber}. ${lesson.subject}\n   Room: ${room}\n   Teacher: ${teacher}`;
+      return `${lesson.lessonNumber}. ${lesson.subject}\n   Аудитория: ${room}\n   Преподаватель: ${teacher}`;
     });
 
     return `${header}\n\n${lines.join("\n")}`;
@@ -502,13 +689,13 @@ class MaxBotService {
    */
   async handleDateCommand(target, senderId, args) {
     if (!args.length) {
-      await this.sendText(target, "Usage: `/date <YYYY-MM-DD> [groupCode|groupName]`");
+      await this.sendText(target, "Использование: `/дата <YYYY-MM-DD> [код|название]`");
       return;
     }
 
     const dateArg = args[0];
     if (!isIsoDate(dateArg)) {
-      await this.sendText(target, "Invalid date format. Expected `YYYY-MM-DD`." );
+      await this.sendText(target, "Неверный формат даты. Ожидается `YYYY-MM-DD`.");
       return;
     }
 
@@ -546,17 +733,17 @@ class MaxBotService {
     if (!nextLesson) {
       await this.sendText(
         target,
-        `No upcoming lessons found for ${resolved.group.name} (${resolved.group.code}).`
+        `Для группы ${resolved.group.name} (${resolved.group.code}) ближайшие пары не найдены.`
       );
       return;
     }
 
     const message = [
-      `Next lesson for ${resolved.group.name} (${resolved.group.code}):`,
-      `${toRuDate(nextLesson.date)}, lesson ${nextLesson.lessonNumber}`,
+      `Ближайшая пара для ${resolved.group.name} (${resolved.group.code}):`,
+      `${toRuDate(nextLesson.date)}, пара ${nextLesson.lessonNumber}`,
       nextLesson.subject,
-      `Room: ${nextLesson.room || "-"}`,
-      `Teacher: ${nextLesson.teacher || "-"}`
+      `Аудитория: ${nextLesson.room || "-"}`,
+      `Преподаватель: ${nextLesson.teacher || "-"}`
     ].join("\n");
 
     await this.sendText(target, message);
@@ -571,12 +758,12 @@ class MaxBotService {
    */
   async handleSyncCommand(target, senderId) {
     if (this.adminUserIds.size > 0 && !this.adminUserIds.has(String(senderId))) {
-      await this.sendText(target, "You are not allowed to run manual sync.");
+      await this.sendText(target, "У вас нет прав для запуска синхронизации.");
       return;
     }
 
     if (this.syncService.isRunning()) {
-      await this.sendText(target, "Sync is already running.");
+      await this.sendText(target, "Синхронизация уже выполняется.");
       return;
     }
 
@@ -584,7 +771,7 @@ class MaxBotService {
       this.logger.error("MAX bot sync trigger failed", { error: error.message });
     });
 
-    await this.sendText(target, "Sync started. Use this command later to refresh data again.");
+    await this.sendText(target, "Синхронизация запущена. Повторите команду позже для обновления.");
   }
 }
 

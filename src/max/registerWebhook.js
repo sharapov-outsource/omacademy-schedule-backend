@@ -21,7 +21,7 @@ const { MaxApiClient } = require("./apiClient");
   const result = await api.createSubscription({
     url,
     secret: config.maxWebhookSecret || undefined,
-    updateTypes: ["message_created", "bot_started"]
+    updateTypes: ["message_created", "bot_started", "message_callback"]
   });
 
   console.log(JSON.stringify({ ok: true, url, result }, null, 2));

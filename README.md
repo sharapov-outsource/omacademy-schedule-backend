@@ -167,15 +167,18 @@ The project contains a complete MAX bot implementation in:
 - `src/max/deleteWebhook.js`
 
 Supported bot commands:
-- `/help`
-- `/groups [query]`
-- `/setgroup <groupCode|groupName>`
-- `/mygroup`
-- `/today [groupCode|groupName]`
-- `/tomorrow [groupCode|groupName]`
-- `/date <YYYY-MM-DD> [groupCode|groupName]`
-- `/next [groupCode|groupName]`
-- `/sync` (admin only)
+- `/помощь` (`/help`)
+- `/кнопки` (shows menu buttons, same as `/помощь`)
+- `/группы [query]` (`/groups`)
+- `/группа <groupCode|groupName>` (`/setgroup`)
+- `/моягруппа` (`/mygroup`)
+- `/сегодня [groupCode|groupName]` (`/today`)
+- `/завтра [groupCode|groupName]` (`/tomorrow`)
+- `/дата <YYYY-MM-DD> [groupCode|groupName]` (`/date`)
+- `/следующая [groupCode|groupName]` (`/next`)
+- `/обновить` (`/sync`, admin only)
+
+The bot also sends an inline keyboard with Russian quick actions (`Сегодня`, `Завтра`, `Следующая пара`, `Моя группа`, `Группы`, `Обновить`, `Помощь`) on `/помощь` and `/start`.
 
 ### Bot configuration variables
 
@@ -207,6 +210,13 @@ Notes:
 npm run max:webhook:register
 ```
 
+If webhook was already registered before button support, delete and register again so subscription includes `message_callback` updates:
+
+```bash
+npm run max:webhook:delete
+npm run max:webhook:register
+```
+
 Webhook endpoint (local path): `POST /webhooks/max`
 
 ### Webhook management
@@ -226,11 +236,11 @@ npm run max:webhook:delete
 ### Bot smoke test
 
 1. Open your bot in MAX messenger.
-2. Send `/help` and verify command list is returned.
-3. Send `/groups исп-9.15` and check that group appears.
-4. Send `/setgroup 60`.
-5. Send `/today` or `/date 2026-02-14`.
-6. If needed, run `/sync` (admin user only when `MAX_ADMIN_USER_IDS` is set).
+2. Send `/помощь` and verify command list is returned.
+3. Send `/группы исп-9.15` and check that group appears.
+4. Send `/группа 60`.
+5. Send `/сегодня` or `/дата 2026-02-14`.
+6. If needed, run `/обновить` (admin user only when `MAX_ADMIN_USER_IDS` is set).
 
 ### Troubleshooting bot setup
 

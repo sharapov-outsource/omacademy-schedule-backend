@@ -35,10 +35,10 @@ class MaxApiClient {
   /**
    * Send a text message to a user or chat.
    *
-   * @param {{userId?: string|number, chatId?: string|number, text: string, format?: string}} params
+   * @param {{userId?: string|number, chatId?: string|number, text: string, format?: string, attachments?: Array<Record<string, any>>, notify?: boolean}} params
    * @returns {Promise<Record<string, any>>}
    */
-  async sendText({ userId, chatId, text, format = "markdown" }) {
+  async sendText({ userId, chatId, text, format = "markdown", attachments, notify = true }) {
     const params = {};
     if (chatId !== undefined && chatId !== null) params.chat_id = chatId;
     if (userId !== undefined && userId !== null) params.user_id = userId;
@@ -47,15 +47,39 @@ class MaxApiClient {
       throw new Error("MAX target is missing: either chatId or userId is required");
     }
 
-    const { data } = await this.http.post(
-      "/messages",
-      {
-        text,
-        format,
-        notify: true
-      },
-      { params }
-    );
+    const payload = {
+      text,
+      format,
+      notify
+    };
+
+    if (Array.isArray(attachments) && attachments.length > 0) {
+      payload.attachments = attachments;
+    }
+
+    const { data } = await this.http.post("/messages", payload, { params });
+
+    return data;
+  }
+
+  /**
+   * Answer a keyboard callback click.
+   *
+   * @param {{callbackId: string, notification?: string, message?: Record<string, any>}} params
+   * @returns {Promise<Record<string, any>>}
+   */
+  async answerCallback({ callbackId, notification, message }) {
+    if (!callbackId) {
+      throw new Error("MAX callbackId is required for /answers");
+    }
+
+    const payload = {};
+    if (notification) payload.notification = notification;
+    if (message) payload.message = message;
+
+    const { data } = await this.http.post("/answers", payload, {
+      params: { callback_id: callbackId }
+    });
 
     return data;
   }
