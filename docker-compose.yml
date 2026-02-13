@@ -3,7 +3,7 @@ services:
     image: mongo:7
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo_data:/data/db
 
@@ -11,7 +11,7 @@ services:
     build: .
     restart: unless-stopped
     ports:
-      - "3100:3000"
+      - "127.0.0.1:3100:3000"
     env_file:
       - .env
     depends_on:
