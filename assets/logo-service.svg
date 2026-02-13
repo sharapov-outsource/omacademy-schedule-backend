@@ -1,0 +1,37 @@
+<svg width="1200" height="360" viewBox="0 0 1200 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OmAcademy MAX Schedule logo">
+  <defs>
+    <linearGradient id="bgGrad" x1="40" y1="40" x2="320" y2="320" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#114B8C"/>
+      <stop offset="1" stop-color="#00A86B"/>
+    </linearGradient>
+    <linearGradient id="markGrad" x1="120" y1="90" x2="240" y2="250" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EAF4FF"/>
+      <stop offset="1" stop-color="#CBE7FF"/>
+    </linearGradient>
+    <filter id="softShadow" x="0" y="0" width="420" height="360" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#softShadow)">
+    <rect x="40" y="40" width="280" height="280" rx="64" fill="url(#bgGrad)"/>
+
+    <!-- chat bubble silhouette (MAX-inspired messenger shape) -->
+    <path d="M95 110C95 92.327 109.327 78 127 78H233C250.673 78 265 92.327 265 110V193C265 210.673 250.673 225 233 225H171L136 252V225H127C109.327 225 95 210.673 95 193V110Z" fill="url(#markGrad)" fill-opacity="0.22"/>
+
+    <!-- academic book + cap mark -->
+    <path d="M114 212C114 191.013 131.013 174 152 174H208C228.987 174 246 191.013 246 212V232C246 240.837 238.837 248 230 248H130C121.163 248 114 240.837 114 232V212Z" fill="url(#markGrad)"/>
+    <path d="M180 124L108 154L180 184L252 154L180 124Z" fill="#F4FAFF"/>
+    <path d="M132 162V186C132 197.046 153.49 206 180 206C206.51 206 228 197.046 228 186V162" stroke="#F4FAFF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- stylized M ribbon inside bubble -->
+    <path d="M136 142L156 184L180 148L204 184L224 142" stroke="#0E5F74" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="372" y="162" fill="#0E1F3B" font-family="Montserrat, Poppins, Segoe UI, Arial, sans-serif" font-size="64" font-weight="800" letter-spacing="0.5">OmAcademy</text>
+  <text x="372" y="224" fill="#0B7A54" font-family="Montserrat, Poppins, Segoe UI, Arial, sans-serif" font-size="56" font-weight="700" letter-spacing="0.4">Schedule Bot for MAX</text>
+
+  <!-- accent divider -->
+  <rect x="372" y="245" width="520" height="8" rx="4" fill="url(#bgGrad)"/>
+</svg>

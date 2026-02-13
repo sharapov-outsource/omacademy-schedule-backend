@@ -1,0 +1,20 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OmAcademy MAX Schedule icon">
+  <defs>
+    <linearGradient id="g1" x1="64" y1="64" x2="448" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#114B8C"/>
+      <stop offset="1" stop-color="#00A86B"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="160" y1="140" x2="350" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F1F9FF"/>
+      <stop offset="1" stop-color="#CBE7FF"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="56" y="56" width="400" height="400" rx="96" fill="url(#g1)"/>
+  <path d="M134 165C134 143.461 151.461 126 173 126H339C360.539 126 378 143.461 378 165V269C378 290.539 360.539 308 339 308H247L201 344V308H173C151.461 308 134 290.539 134 269V165Z" fill="url(#g2)" fill-opacity="0.2"/>
+
+  <path d="M145 289C145 263.595 165.595 243 191 243H321C346.405 243 367 263.595 367 289V315C367 325.493 358.493 334 348 334H164C153.507 334 145 325.493 145 315V289Z" fill="url(#g2)"/>
+  <path d="M256 144L154 186L256 228L358 186L256 144Z" fill="#F4FAFF"/>
+  <path d="M188 196V230C188 245.464 218.445 258 256 258C293.555 258 324 245.464 324 230V196" stroke="#F4FAFF" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M172 171L201 231L256 183L311 231L340 171" stroke="#0E5F74" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
