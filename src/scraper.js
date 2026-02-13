@@ -43,7 +43,32 @@ function mapLimit(items, limit, iterator) {
   return Promise.all(workers).then(() => result);
 }
 
+/**
+ * @typedef {Object} ScraperGroup
+ * @property {string} code
+ * @property {string} name
+ * @property {string} href
+ * @property {string} url
+ */
+
+/**
+ * @typedef {Object} ScraperLesson
+ * @property {string} groupCode
+ * @property {string} groupName
+ * @property {string} date
+ * @property {string|null} dayLabel
+ * @property {number} lessonNumber
+ * @property {number} columnIndex
+ * @property {string} subject
+ * @property {string|null} room
+ * @property {string|null} teacher
+ * @property {string} sourceUrl
+ */
+
 class OmAcademyScraper {
+  /**
+   * @param {{baseUrl: string, timeoutMs?: number, maxConcurrentRequests?: number}} options
+   */
   constructor({ baseUrl, timeoutMs = 20000, maxConcurrentRequests = 5 }) {
     this.baseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
     this.timeoutMs = timeoutMs;
@@ -51,10 +76,22 @@ class OmAcademyScraper {
     this.http = axios.create({ timeout: this.timeoutMs });
   }
 
+  /**
+   * Build an absolute URL from a relative source path.
+   *
+   * @param {string} relativePath
+   * @returns {string}
+   */
   buildUrl(relativePath) {
     return new URL(relativePath, this.baseUrl).href;
   }
 
+  /**
+   * Fetch raw HTML from the source website with retry logic.
+   *
+   * @param {string} relativePath
+   * @returns {Promise<{html: string, url: string}>}
+   */
   async fetchHtml(relativePath) {
     const url = this.buildUrl(relativePath);
     let lastError = null;
@@ -75,11 +112,22 @@ class OmAcademyScraper {
     throw new Error(`Failed to fetch ${url}: ${lastError?.message || "unknown error"}`);
   }
 
+  /**
+   * Parse the source "last updated" timestamp from the page header.
+   *
+   * @param {import("cheerio").CheerioAPI} $
+   * @returns {string|null}
+   */
   extractSourceUpdatedAt($) {
     const refText = cleanText($("div.ref").first().text());
     return parseRuDateTime(refText);
   }
 
+  /**
+   * Parse all groups from `cg.htm`.
+   *
+   * @returns {Promise<{sourceUrl: string, sourceUpdatedAt: string|null, groups: ScraperGroup[]}>}
+   */
   async fetchGroups() {
     const { html, url } = await this.fetchHtml("cg.htm");
     const $ = cheerio.load(html);
@@ -109,6 +157,12 @@ class OmAcademyScraper {
     };
   }
 
+  /**
+   * Parse day/date metadata from the first table cell in a schedule row.
+   *
+   * @param {string} rawHtml
+   * @returns {{date: string|null, dayLabel: string|null}}
+   */
   parseDayCellHtml(rawHtml) {
     const normalized = (rawHtml || "")
       .replace(/<br\s*\/?>/gi, "\n")
@@ -128,6 +182,12 @@ class OmAcademyScraper {
     };
   }
 
+  /**
+   * Parse all lesson rows for a single group page (`cgXXX.htm`).
+   *
+   * @param {{code: string, name: string, href: string}} group
+   * @returns {Promise<{group: ScraperGroup, lessons: ScraperLesson[]}>}
+   */
   async fetchGroupLessons(group) {
     const { html, url } = await this.fetchHtml(group.href);
     const $ = cheerio.load(html);
@@ -199,6 +259,12 @@ class OmAcademyScraper {
     };
   }
 
+  /**
+   * Parse lessons for all groups with bounded concurrency.
+   *
+   * @param {ScraperGroup[]} groups
+   * @returns {Promise<{groups: ScraperGroup[], lessons: ScraperLesson[]}>}
+   */
   async fetchAllLessons(groups) {
     const chunks = await mapLimit(
       groups,

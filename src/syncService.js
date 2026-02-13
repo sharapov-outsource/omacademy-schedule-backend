@@ -1,4 +1,7 @@
 class SyncService {
+  /**
+   * @param {{scraper: any, repository: any, logger: any}} deps
+   */
   constructor({ scraper, repository, logger }) {
     this.scraper = scraper;
     this.repository = repository;
@@ -8,10 +11,20 @@ class SyncService {
     this.lastResult = null;
   }
 
+  /**
+   * Check whether synchronization is currently running.
+   *
+   * @returns {boolean}
+   */
   isRunning() {
     return this.running;
   }
 
+  /**
+   * Get in-memory sync state for diagnostics endpoints.
+   *
+   * @returns {{running: boolean, lastError: string|null, lastResult: Record<string, any>|null}}
+   */
   getState() {
     return {
       running: this.running,
@@ -20,6 +33,12 @@ class SyncService {
     };
   }
 
+  /**
+   * Run one full synchronization cycle.
+   *
+   * @param {string} [trigger="manual"]
+   * @returns {Promise<Record<string, any>>}
+   */
   async run(trigger = "manual") {
     // Prevent overlapping sync jobs from cron/manual/startup triggers.
     if (this.running) {

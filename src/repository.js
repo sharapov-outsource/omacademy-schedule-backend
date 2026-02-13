@@ -1,4 +1,7 @@
 class ScheduleRepository {
+  /**
+   * @param {import("mongodb").Db} db
+   */
   constructor(db) {
     this.db = db;
     this.groups = db.collection("groups");
@@ -7,6 +10,11 @@ class ScheduleRepository {
     this.syncRuns = db.collection("syncRuns");
   }
 
+  /**
+   * Create and maintain MongoDB indexes required for query performance and deduplication.
+   *
+   * @returns {Promise<void>}
+   */
   async ensureIndexes() {
     // Groups are uniquely identified by code from cgXXX.htm.
     await this.groups.createIndex({ code: 1 }, { unique: true, name: "uniq_group_code" });
@@ -32,6 +40,13 @@ class ScheduleRepository {
     await this.syncRuns.createIndex({ startedAt: -1 });
   }
 
+  /**
+   * Persist start metadata for a sync run.
+   *
+   * @param {string} syncId
+   * @param {string} trigger
+   * @returns {Promise<void>}
+   */
   async startSyncRun(syncId, trigger) {
     await this.syncRuns.insertOne({
       syncId,
@@ -41,6 +56,13 @@ class ScheduleRepository {
     });
   }
 
+  /**
+   * Mark a sync run as completed (success or failure).
+   *
+   * @param {string} syncId
+   * @param {Record<string, any>} payload
+   * @returns {Promise<void>}
+   */
   async finishSyncRun(syncId, payload) {
     await this.syncRuns.updateOne(
       { syncId },
@@ -53,6 +75,12 @@ class ScheduleRepository {
     );
   }
 
+  /**
+   * Store a complete synchronization snapshot and promote it as active.
+   *
+   * @param {{syncId: string, groups: Array<Record<string, any>>, lessons: Array<Record<string, any>>, sourceUpdatedAt: string|null}} params
+   * @returns {Promise<void>}
+   */
   async saveSnapshot({ syncId, groups, lessons, sourceUpdatedAt }) {
     const now = new Date();
 
@@ -124,10 +152,20 @@ class ScheduleRepository {
     await this.groups.deleteMany({ lastSeenSyncId: { $ne: syncId } });
   }
 
+  /**
+   * Get metadata for the currently active schedule snapshot.
+   *
+   * @returns {Promise<Record<string, any>|null>}
+   */
   async getActiveSyncMeta() {
     return this.meta.findOne({ _id: "schedule" });
   }
 
+  /**
+   * Get active groups from the latest synchronized snapshot.
+   *
+   * @returns {Promise<Array<Record<string, any>>>}
+   */
   async getActiveGroups() {
     const meta = await this.getActiveSyncMeta();
     if (!meta?.activeSyncId) return [];
@@ -138,6 +176,12 @@ class ScheduleRepository {
       .toArray();
   }
 
+  /**
+   * Get lessons from the active snapshot with optional exact-match filters.
+   *
+   * @param {{group?: string, groupCode?: string|number, date?: string, teacher?: string, room?: string}} [filters]
+   * @returns {Promise<Array<Record<string, any>>>}
+   */
   async getActiveLessons(filters = {}) {
     const meta = await this.getActiveSyncMeta();
     if (!meta?.activeSyncId) return [];
@@ -157,6 +201,11 @@ class ScheduleRepository {
       .toArray();
   }
 
+  /**
+   * Get the latest synchronization run record.
+   *
+   * @returns {Promise<Record<string, any>|null>}
+   */
   async getLastSyncRun() {
     return this.syncRuns.find().sort({ startedAt: -1 }).limit(1).next();
   }

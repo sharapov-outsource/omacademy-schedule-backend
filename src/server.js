@@ -7,6 +7,8 @@ const { connectMongo } = require("./db");
 const { OmAcademyScraper } = require("./scraper");
 const { ScheduleRepository } = require("./repository");
 const { SyncService } = require("./syncService");
+const { MaxBotService } = require("./max/botService");
+const { registerMaxWebhookRoute } = require("./max/webhook");
 
 async function bootstrap() {
   // Initialize infrastructure first: DB connection, indexes, scraper, sync service.
@@ -23,9 +25,39 @@ async function bootstrap() {
   });
 
   const syncService = new SyncService({ scraper, repository, logger });
+  let maxBotService = null;
 
   const app = express();
   app.use(express.json());
+
+  if (config.maxBotEnabled) {
+    if (!config.maxBotToken) {
+      throw new Error("MAX_BOT_ENABLED=true but MAX_BOT_TOKEN is empty");
+    }
+
+    maxBotService = new MaxBotService({
+      db,
+      scheduleRepository: repository,
+      syncService,
+      logger,
+      token: config.maxBotToken,
+      apiBaseUrl: config.maxApiBaseUrl,
+      timeoutMs: config.httpTimeoutMs,
+      timezone: config.syncTimezone,
+      adminUserIds: config.maxAdminUserIds
+    });
+
+    await maxBotService.init();
+    registerMaxWebhookRoute(app, {
+      botService: maxBotService,
+      logger,
+      config: {
+        webhookPath: config.maxWebhookPath,
+        webhookSecret: config.maxWebhookSecret,
+        webhookSecretHeader: config.maxWebhookSecretHeader
+      }
+    });
+  }
 
   // Liveness endpoint plus active snapshot metadata.
   app.get("/health", async (req, res) => {
@@ -100,6 +132,9 @@ async function bootstrap() {
   const server = app.listen(config.port, () => {
     logger.info(`Backend listening on port ${config.port}`);
     logger.info(`Daily sync cron: ${config.syncCron} (${config.syncTimezone})`);
+    if (config.maxBotEnabled) {
+      logger.info(`MAX webhook enabled on path: ${config.maxWebhookPath}`);
+    }
   });
 
   async function shutdown(signal) {

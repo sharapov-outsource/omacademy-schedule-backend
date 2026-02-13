@@ -14,18 +14,19 @@ Source website:
 - Runs daily automatic sync via cron
 - Supports manual sync via API endpoint
 - Exposes REST API for schedule queries
+- Includes a ready-to-run MAX messenger bot (webhook mode)
 
 ## What Gets Parsed
 
 For each lesson, the backend saves:
 - group code (e.g. `60`)
-- group name (e.g. `ИСП-9.15`)
+- group name (e.g. `ИСП-9.16`)
 - date (`YYYY-MM-DD`)
 - day label (e.g. `Сб-1`)
 - lesson number (e.g. `2`)
 - subject (e.g. `МДК.03.02 Управление проектами (Лек)`)
-- room (e.g. `207`, `дист. обуч`, `обр.портал`)
-- teacher (e.g. `Кочемайкина Лариса Адамовна`)
+- room (e.g. `309`, `дист. обуч`, `обр.портал`)
+- teacher (e.g. `Шарапов Александр Евгеньевич`)
 
 ## Tech Stack
 
@@ -61,6 +62,68 @@ curl -X POST "http://localhost:3000/api/sync"
 curl "http://localhost:3000/health"
 ```
 
+## Production Deployment
+
+This service is designed to run as a long-lived process behind a public HTTPS endpoint.
+
+### 1. Prepare production environment
+
+- Linux server or VPS
+- Docker + Docker Compose installed
+- Public domain (required for MAX webhook mode)
+- TLS certificate (Let's Encrypt or your existing certificate)
+
+### 2. Configure environment
+
+Create a production `.env` file:
+
+```bash
+cp .env.example .env
+```
+
+Recommended production values:
+
+```bash
+PORT=3000
+MONGO_URI=mongodb://mongo:27017/omacademy_schedule
+SOURCE_BASE_URL=https://omacademy.ru/rasp-new/Website-students/
+SYNC_CRON=0 5 * * *
+SYNC_TIMEZONE=Asia/Omsk
+RUN_SYNC_ON_STARTUP=true
+HTTP_TIMEOUT_MS=20000
+MAX_CONCURRENT_REQUESTS=5
+```
+
+### 3. Build and start containers
+
+```bash
+docker compose up -d --build
+```
+
+### 4. Verify backend is healthy
+
+```bash
+curl "http://localhost:3000/health"
+curl "http://localhost:3000/api/sync/status"
+```
+
+### 5. Put backend behind HTTPS reverse proxy
+
+Expose the service publicly as HTTPS (for example with Nginx, Caddy, or Traefik) and proxy traffic to `http://127.0.0.1:3000`.
+
+Required public endpoint format:
+
+`https://your-domain.example/webhooks/max`
+
+### 6. Operations checklist
+
+- Check logs:
+  - `docker compose logs -f backend`
+  - `docker compose logs -f mongo`
+- Trigger manual sync after deploy:
+  - `curl -X POST "http://localhost:3000/api/sync"`
+- Ensure firewall allows inbound `443` and blocks direct external access to internal-only ports where possible.
+
 ## Local Run (without Docker)
 
 1. Install dependencies:
@@ -82,6 +145,103 @@ Optional one-time sync from CLI:
 ```bash
 npm run sync:once
 ```
+
+Webhook management for MAX:
+
+```bash
+npm run max:webhook:register
+npm run max:webhook:list
+npm run max:webhook:delete
+```
+
+## MAX Bot
+
+The project contains a complete MAX bot implementation in:
+
+- `src/max/apiClient.js`
+- `src/max/botService.js`
+- `src/max/webhook.js`
+- `src/max/userPrefsRepository.js`
+- `src/max/registerWebhook.js`
+- `src/max/listWebhooks.js`
+- `src/max/deleteWebhook.js`
+
+Supported bot commands:
+- `/help`
+- `/groups [query]`
+- `/setgroup <groupCode|groupName>`
+- `/mygroup`
+- `/today [groupCode|groupName]`
+- `/tomorrow [groupCode|groupName]`
+- `/date <YYYY-MM-DD> [groupCode|groupName]`
+- `/next [groupCode|groupName]`
+- `/sync` (admin only)
+
+### Bot configuration variables
+
+Set these in `.env`:
+
+```bash
+MAX_BOT_ENABLED=true
+MAX_BOT_TOKEN=your_bot_token
+MAX_API_BASE_URL=https://platform-api.max.ru
+MAX_WEBHOOK_PATH=/webhooks/max
+MAX_WEBHOOK_SECRET=your_random_secret
+MAX_WEBHOOK_SECRET_HEADER=x-max-bot-api-secret
+MAX_WEBHOOK_PUBLIC_URL=https://your-domain.example
+MAX_ADMIN_USER_IDS=12345,67890
+```
+
+Notes:
+- `MAX_WEBHOOK_PUBLIC_URL` must be public HTTPS.
+- `MAX_WEBHOOK_PATH` must match your Express route and webhook registration URL.
+- `MAX_ADMIN_USER_IDS` controls who can run `/sync` from chat. If empty, everyone can run it.
+
+### Enable and run bot
+
+1. Set bot env vars in `.env` (see above).
+2. Start backend (`npm start` or Docker).
+3. Register webhook:
+
+```bash
+npm run max:webhook:register
+```
+
+Webhook endpoint (local path): `POST /webhooks/max`
+
+### Webhook management
+
+List subscriptions:
+
+```bash
+npm run max:webhook:list
+```
+
+Delete current webhook (for configured public URL + path):
+
+```bash
+npm run max:webhook:delete
+```
+
+### Bot smoke test
+
+1. Open your bot in MAX messenger.
+2. Send `/help` and verify command list is returned.
+3. Send `/groups исп-9.15` and check that group appears.
+4. Send `/setgroup 60`.
+5. Send `/today` or `/date 2026-02-14`.
+6. If needed, run `/sync` (admin user only when `MAX_ADMIN_USER_IDS` is set).
+
+### Troubleshooting bot setup
+
+- `401 invalid webhook secret`:
+  - verify `MAX_WEBHOOK_SECRET` and `MAX_WEBHOOK_SECRET_HEADER`.
+- No incoming updates:
+  - ensure webhook URL is HTTPS and publicly reachable.
+  - verify subscription with `npm run max:webhook:list`.
+- Bot responds in API but not in chat:
+  - verify `MAX_BOT_TOKEN` is correct and active.
+  - check backend logs: `docker compose logs -f backend`.
 
 ## API
 
@@ -135,6 +295,14 @@ Returns current sync state, last error (if any), and latest run metadata.
 | `RUN_SYNC_ON_STARTUP` | `true` | Run synchronization on backend startup |
 | `HTTP_TIMEOUT_MS` | `20000` | HTTP timeout for source requests |
 | `MAX_CONCURRENT_REQUESTS` | `5` | Concurrent requests while parsing group pages |
+| `MAX_BOT_ENABLED` | `false` | Enable MAX messenger bot integration |
+| `MAX_BOT_TOKEN` | `` | MAX bot token |
+| `MAX_API_BASE_URL` | `https://platform-api.max.ru` | MAX API base URL |
+| `MAX_WEBHOOK_PATH` | `/webhooks/max` | Express route for incoming MAX webhook updates |
+| `MAX_WEBHOOK_SECRET` | `` | Secret value expected in webhook request headers |
+| `MAX_WEBHOOK_SECRET_HEADER` | `x-max-bot-api-secret` | Header name used to read webhook secret |
+| `MAX_WEBHOOK_PUBLIC_URL` | `` | Public base URL used by webhook registration scripts |
+| `MAX_ADMIN_USER_IDS` | `` | Comma-separated MAX user IDs allowed to run `/sync` |
 
 ## Data Model (MongoDB)
 
@@ -184,6 +352,14 @@ src/
   syncService.js
   server.js
   manualSync.js
+  max/
+    apiClient.js
+    botService.js
+    webhook.js
+    userPrefsRepository.js
+    registerWebhook.js
+    listWebhooks.js
+    deleteWebhook.js
 ```
 
 ## Notes

@@ -6,7 +6,10 @@
   "author": "Alexander S. <alexander@sharapov.biz>",
   "scripts": {
     "start": "node src/server.js",
-    "sync:once": "node src/manualSync.js"
+    "sync:once": "node src/manualSync.js",
+    "max:webhook:register": "node src/max/registerWebhook.js",
+    "max:webhook:list": "node src/max/listWebhooks.js",
+    "max:webhook:delete": "node src/max/deleteWebhook.js"
   },
   "dependencies": {
     "axios": "^1.8.4",
