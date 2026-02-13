@@ -21,6 +21,7 @@ class SyncService {
   }
 
   async run(trigger = "manual") {
+    // Prevent overlapping sync jobs from cron/manual/startup triggers.
     if (this.running) {
       return {
         ok: false,
@@ -43,6 +44,7 @@ class SyncService {
       const groupsPayload = await this.scraper.fetchGroups();
       const { groups, sourceUpdatedAt } = groupsPayload;
 
+      // Parse every group page, then atomically publish a new active snapshot.
       const { groups: normalizedGroups, lessons } = await this.scraper.fetchAllLessons(groups);
 
       await this.repository.saveSnapshot({

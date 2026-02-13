@@ -1,3 +1,4 @@
+// Small structured logger wrapper with ISO timestamp and level.
 function stamp(level, message, extra) {
   const time = new Date().toISOString();
   if (extra === undefined) {

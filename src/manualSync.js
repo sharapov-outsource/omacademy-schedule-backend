@@ -5,6 +5,7 @@ const { OmAcademyScraper } = require("./scraper");
 const { ScheduleRepository } = require("./repository");
 const { SyncService } = require("./syncService");
 
+// CLI entry point to run one synchronization cycle outside the HTTP server.
 (async () => {
   const client = await connectMongo(config.mongoUri);
   const db = client.db();

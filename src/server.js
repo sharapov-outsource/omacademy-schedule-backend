@@ -9,6 +9,7 @@ const { ScheduleRepository } = require("./repository");
 const { SyncService } = require("./syncService");
 
 async function bootstrap() {
+  // Initialize infrastructure first: DB connection, indexes, scraper, sync service.
   const mongoClient = await connectMongo(config.mongoUri);
   const db = mongoClient.db();
 
@@ -26,6 +27,7 @@ async function bootstrap() {
   const app = express();
   app.use(express.json());
 
+  // Liveness endpoint plus active snapshot metadata.
   app.get("/health", async (req, res) => {
     const meta = await repository.getActiveSyncMeta();
     res.json({
@@ -81,6 +83,7 @@ async function bootstrap() {
   cron.schedule(
     config.syncCron,
     () => {
+      // Fire-and-log cron sync; do not crash the server on sync failures.
       syncService.run("cron").catch((error) => {
         logger.error("Cron sync failed", { error: error.message });
       });
@@ -100,6 +103,7 @@ async function bootstrap() {
   });
 
   async function shutdown(signal) {
+    // Graceful shutdown: stop accepting requests, then close DB connection.
     logger.warn(`Received ${signal}, shutting down...`);
     server.close(async () => {
       await mongoClient.close();

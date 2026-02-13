@@ -2,16 +2,19 @@ const dotenv = require("dotenv");
 
 dotenv.config();
 
+// Parse boolean-like env vars with a safe default.
 function toBool(value, fallback) {
   if (value === undefined) return fallback;
   return String(value).toLowerCase() === "true";
 }
 
+// Parse integer env vars and fall back on invalid values.
 function toInt(value, fallback) {
   const num = Number.parseInt(value, 10);
   return Number.isFinite(num) ? num : fallback;
 }
 
+// Centralized application config loaded from environment variables.
 module.exports = {
   port: toInt(process.env.PORT, 3000),
   mongoUri: process.env.MONGO_URI || "mongodb://localhost:27017/omacademy_schedule",

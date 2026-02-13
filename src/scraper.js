@@ -1,6 +1,7 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
 
+// Normalize whitespace artifacts from HTML (including non-breaking spaces).
 function cleanText(value) {
   return (value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -58,6 +59,7 @@ class OmAcademyScraper {
     const url = this.buildUrl(relativePath);
     let lastError = null;
 
+    // Retry transient network failures to reduce sync instability.
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         const response = await this.http.get(url);
@@ -83,6 +85,7 @@ class OmAcademyScraper {
     const $ = cheerio.load(html);
 
     const groups = [];
+    // Group links on cg.htm are stored as anchors like cg238.htm.
     $("a.z0[href^='cg'][href$='.htm']").each((_, el) => {
       const href = $(el).attr("href");
       const name = cleanText($(el).text());
@@ -118,6 +121,7 @@ class OmAcademyScraper {
       .filter(Boolean);
 
     if (parts.length === 0) return { date: null, dayLabel: null };
+    // Day rows look like: "13.02.2026<br>Пт-1".
     return {
       date: parseRuDate(parts[0]),
       dayLabel: parts[1] || null
@@ -144,6 +148,7 @@ class OmAcademyScraper {
       const firstCellHtml = $(cells[0]).html() || "";
       const parsed = this.parseDayCellHtml(firstCellHtml);
       if (parsed.date) {
+        // Day value is carried by the first row and applies to following pair rows.
         currentDate = parsed.date;
         currentDayLabel = parsed.dayLabel;
         offset = 1;
@@ -161,6 +166,7 @@ class OmAcademyScraper {
 
       lessonCells.forEach((lessonCell, idx) => {
         const td = $(lessonCell);
+        // "nul" means an empty slot with no lesson data.
         if (td.hasClass("nul")) return;
 
         const subject = cleanText(td.find("a.z1").first().text());
