@@ -10,6 +10,28 @@ function getIsoDateInTimezone(timezone) {
   }).format(new Date());
 }
 
+function getTimezoneNow(timezone) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(new Date());
+
+  const byType = {};
+  parts.forEach((part) => {
+    byType[part.type] = part.value;
+  });
+
+  return {
+    isoDate: `${byType.year}-${byType.month}-${byType.day}`,
+    hhmm: `${byType.hour}:${byType.minute}`
+  };
+}
+
 function shiftIsoDate(isoDate, deltaDays) {
   const base = new Date(`${isoDate}T00:00:00Z`);
   base.setUTCDate(base.getUTCDate() + deltaDays);
@@ -224,6 +246,35 @@ function splitLongMessage(text, maxLen = 3800) {
   return chunks;
 }
 
+function parseLessonStartTimes(value) {
+  const defaults = {
+    1: "08:30",
+    2: "10:15",
+    3: "12:10",
+    4: "13:55",
+    5: "15:40",
+    6: "17:25"
+  };
+
+  if (!value) return defaults;
+
+  const map = {};
+  String(value)
+    .split(",")
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .forEach((chunk) => {
+      const [left, right] = chunk.split("=");
+      const lessonNumber = Number.parseInt(String(left || "").trim(), 10);
+      const hhmm = String(right || "").trim();
+      if (!Number.isFinite(lessonNumber)) return;
+      if (!/^\d{2}:\d{2}$/.test(hhmm)) return;
+      map[lessonNumber] = hhmm;
+    });
+
+  return Object.keys(map).length > 0 ? map : defaults;
+}
+
 class MaxBotService {
   /**
    * @param {{
@@ -235,6 +286,7 @@ class MaxBotService {
    *  apiBaseUrl?: string,
    *  timeoutMs?: number,
    *  timezone: string,
+   *  lessonStartTimes?: string,
    *  adminUserIds?: Array<string|number>
    * }} deps
    */
@@ -247,12 +299,14 @@ class MaxBotService {
     apiBaseUrl,
     timeoutMs,
     timezone,
+    lessonStartTimes,
     adminUserIds
   }) {
     this.logger = logger;
     this.scheduleRepository = scheduleRepository;
     this.syncService = syncService;
     this.timezone = timezone;
+    this.lessonStartTimes = parseLessonStartTimes(lessonStartTimes);
     this.adminUserIds = new Set((adminUserIds || []).map((id) => String(id)));
     this.lastSenderByTarget = new Map();
     this.pendingByTarget = new Map();
@@ -1387,13 +1441,8 @@ class MaxBotService {
       return;
     }
 
-    const limit = query ? 60 : 35;
-    const lines = filtered.slice(0, limit).map((g, index) => `${index + 1}. ${g.name} (код: ${g.code})`);
-
+    const lines = filtered.map((g, index) => `${index + 1}. ${g.name} (код: ${g.code})`);
     let result = `Найдено групп: ${filtered.length}\n\n${lines.join("\n")}`;
-    if (filtered.length > limit) {
-      result += `\n\nПоказаны первые ${limit}. Уточните запрос: /группы <текст>.`;
-    }
     result += "\n\nЧтобы выбрать группу: `/группа <код>`";
 
     await this.sendText(target, result);
@@ -1423,16 +1472,50 @@ class MaxBotService {
       return;
     }
 
-    const limit = query ? 60 : 35;
-    const lines = filtered.slice(0, limit).map((teacher, index) => `${index + 1}. ${teacher.name}`);
-
+    const lines = filtered.map((teacher, index) => `${index + 1}. ${teacher.name}`);
     let result = `Найдено преподавателей: ${filtered.length}\n\n${lines.join("\n")}`;
-    if (filtered.length > limit) {
-      result += `\n\nПоказаны первые ${limit}. Уточните запрос: /преподаватели <текст>.`;
-    }
     result += "\n\nЧтобы выбрать преподавателя: `/препод <ФИО>`";
 
     await this.sendText(target, result);
+  }
+
+  /**
+   * Get configured lesson start time by lesson number.
+   *
+   * @param {number} lessonNumber
+   * @returns {string}
+   */
+  getLessonStartTime(lessonNumber) {
+    return this.lessonStartTimes[lessonNumber] || "--:--";
+  }
+
+  /**
+   * Pick nearest lesson not earlier than current date/time.
+   *
+   * @param {Array<Record<string, any>>} lessons
+   * @returns {Record<string, any>|null}
+   */
+  findNextLesson(lessons) {
+    if (!Array.isArray(lessons) || !lessons.length) return null;
+    const now = getTimezoneNow(this.timezone);
+
+    const sorted = lessons
+      .slice()
+      .sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        return a.lessonNumber - b.lessonNumber;
+      });
+
+    const upcoming = sorted.find((lesson) => {
+      if (lesson.date > now.isoDate) return true;
+      if (lesson.date < now.isoDate) return false;
+
+      const start = this.getLessonStartTime(lesson.lessonNumber);
+      if (start === "--:--") return true;
+      return start >= now.hhmm;
+    });
+
+    return upcoming || null;
   }
 
   /**
@@ -1621,15 +1704,8 @@ class MaxBotService {
       return;
     }
 
-    const today = getIsoDateInTimezone(this.timezone);
     const lessons = await this.scheduleRepository.getActiveLessons({ groupCode: resolved.group.code });
-
-    const nextLesson = lessons
-      .filter((l) => l.date >= today)
-      .sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        return a.lessonNumber - b.lessonNumber;
-      })[0];
+    const nextLesson = this.findNextLesson(lessons);
 
     if (!nextLesson) {
       await this.sendText(
@@ -1642,6 +1718,7 @@ class MaxBotService {
     const message = [
       `Ближайшая пара для ${resolved.group.name} (${resolved.group.code}):`,
       `${toRuDate(nextLesson.date)}, пара ${nextLesson.lessonNumber}`,
+      `Время начала: ${this.getLessonStartTime(nextLesson.lessonNumber)}`,
       nextLesson.subject,
       `Аудитория: ${nextLesson.room || "-"}`,
       `Преподаватель: ${nextLesson.teacher || "-"}`
@@ -1755,21 +1832,28 @@ class MaxBotService {
       return;
     }
 
-    const today = getIsoDateInTimezone(this.timezone);
     const lessons = await this.getTeacherLessons(resolved.teacher);
-    const nextLesson = lessons.filter((lesson) => lesson.date >= today)[0];
+    const nextLesson = this.findNextLesson(lessons);
 
     if (!nextLesson) {
       await this.sendText(target, `Для преподавателя ${resolved.teacher.name} ближайшие пары не найдены.`);
       return;
     }
+    const dayLessonsCount = new Set(
+      lessons
+        .filter((lesson) => lesson.date === nextLesson.date)
+        .map((lesson) => Number.parseInt(lesson.lessonNumber, 10))
+        .filter((lessonNumber) => Number.isFinite(lessonNumber))
+    ).size;
 
     const message = [
       `Ближайшая пара преподавателя ${resolved.teacher.name}:`,
       `${toRuDate(nextLesson.date)}, пара ${nextLesson.lessonNumber}`,
+      `Время начала: ${this.getLessonStartTime(nextLesson.lessonNumber)}`,
       nextLesson.subject,
       `Группа: ${nextLesson.groupName || nextLesson.groupCode || "-"}`,
-      `Аудитория: ${nextLesson.room || "-"}`
+      `Аудитория: ${nextLesson.room || "-"}`,
+      `Всего пар в этот день: ${dayLessonsCount}`
     ].join("\n");
 
     await this.sendText(target, message);

@@ -46,6 +46,7 @@ async function bootstrap() {
       apiBaseUrl: config.maxApiBaseUrl,
       timeoutMs: config.httpTimeoutMs,
       timezone: config.syncTimezone,
+      lessonStartTimes: config.reminderLessonStartTimes,
       adminUserIds: config.maxAdminUserIds
     });
 
