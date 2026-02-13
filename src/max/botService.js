@@ -248,6 +248,8 @@ class MaxBotService {
     this.syncService = syncService;
     this.timezone = timezone;
     this.adminUserIds = new Set((adminUserIds || []).map((id) => String(id)));
+    this.lastSenderByTarget = new Map();
+    this.pendingByTarget = new Map();
 
     this.api = new MaxApiClient({ token, apiBaseUrl, timeoutMs });
     this.userPrefsRepository = new MaxUserPrefsRepository(db);
@@ -295,6 +297,7 @@ class MaxBotService {
       this.logger.warn("MAX update target cannot be resolved", { updateType: update.update_type });
       return;
     }
+    this.rememberTargetSender(target, senderId);
 
     if (!isSlashCommand(text)) {
       const consumedByWizard = await this.handlePendingTextInput({ senderId, target, text });
@@ -366,15 +369,58 @@ class MaxBotService {
   }
 
   /**
+   * Build stable key for target-scoped in-memory state.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @returns {string}
+   */
+  targetKey(target) {
+    if (target?.chatId !== undefined && target?.chatId !== null) return `chat:${String(target.chatId)}`;
+    if (target?.userId !== undefined && target?.userId !== null) return `user:${String(target.userId)}`;
+    return "";
+  }
+
+  /**
+   * Save last sender for current target and cleanup stale pending state.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @returns {void}
+   */
+  rememberTargetSender(target, senderId) {
+    const key = this.targetKey(target);
+    if (!key || !senderId) return;
+    this.lastSenderByTarget.set(key, String(senderId));
+
+    const state = this.pendingByTarget.get(key);
+    if (!state?.updatedAt) return;
+    // 15-minute TTL for in-memory wizard state.
+    if (Date.now() - state.updatedAt > 15 * 60 * 1000) {
+      this.pendingByTarget.delete(key);
+    }
+  }
+
+  /**
    * Send a bot message and split it into multiple chunks if needed.
    *
    * @param {{chatId?: string|number, userId?: string|number}} target
    * @param {string} text
-   * @param {{attachments?: Array<Record<string, any>>}} [options]
+   * @param {{attachments?: Array<Record<string, any>>, noMenu?: boolean, senderId?: string}} [options]
    * @returns {Promise<void>}
    */
   async sendText(target, text, options = {}) {
-    const attachments = Array.isArray(options.attachments) ? options.attachments : undefined;
+    let attachments = Array.isArray(options.attachments) ? options.attachments : undefined;
+    const noMenu = options.noMenu === true;
+    const senderIdFromOptions = options.senderId ? String(options.senderId) : "";
+    const key = this.targetKey(target);
+    const senderIdFromTarget = key ? this.lastSenderByTarget.get(key) || "" : "";
+    const effectiveSenderId = senderIdFromOptions || senderIdFromTarget;
+
+    if (!attachments && !noMenu && effectiveSenderId) {
+      const role = await this.getUserRole(effectiveSenderId);
+      attachments = role ? this.mainMenuKeyboard(role) : this.roleSelectionKeyboard();
+    }
+
     const chunks = splitLongMessage(text);
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index];
@@ -573,26 +619,30 @@ class MaxBotService {
     const callbackId = update?.callback?.callback_id || update?.callback_id;
     if (!callbackId) return;
 
-    const senderId = this.resolveSenderId(update);
     const target = this.resolveTarget(update);
+    const targetKey = this.targetKey(target);
+    const senderId =
+      this.resolveSenderId(update) || (targetKey ? this.lastSenderByTarget.get(targetKey) || "" : "");
+
     if (!senderId || !target) {
       await this.safeAnswerCallback(callbackId, "Не удалось обработать кнопку.");
       return;
     }
+    this.rememberTargetSender(target, senderId);
 
     const command = parseCallbackCommand(update?.callback?.payload || update?.payload);
 
     if (command.startsWith("pickg:")) {
-      const groupCode = command.slice("pickg:".length).trim();
+      const payload = command.slice("pickg:".length).trim();
       await this.safeAnswerCallback(callbackId, "Выбрано");
-      await this.handlePickGroupFromCallback(target, senderId, groupCode);
+      await this.handlePickGroupFromCallback(target, senderId, payload);
       return;
     }
 
     if (command.startsWith("pickt:")) {
-      const token = command.slice("pickt:".length).trim();
+      const payload = command.slice("pickt:".length).trim();
       await this.safeAnswerCallback(callbackId, "Выбрано");
-      await this.handlePickTeacherFromCallback(target, senderId, token);
+      await this.handlePickTeacherFromCallback(target, senderId, payload);
       return;
     }
 
@@ -626,27 +676,33 @@ class MaxBotService {
    *
    * @param {{chatId?: string|number, userId?: string|number}} target
    * @param {string} senderId
-   * @param {string} groupCode
+   * @param {string} payload
    * @returns {Promise<void>}
    */
-  async handlePickGroupFromCallback(target, senderId, groupCode) {
+  async handlePickGroupFromCallback(target, senderId, payload) {
+    const [groupCodeRaw, senderToken] = String(payload || "").split(":");
+    const groupCode = String(groupCodeRaw || "").trim();
+    const senderFromToken = decodeToken(senderToken);
+    const effectiveSenderId = senderFromToken || senderId;
+
     if (!groupCode) {
       await this.sendText(target, "Не удалось определить группу. Попробуйте снова.");
       return;
     }
 
-    const resolved = await this.resolveGroup(senderId, groupCode);
+    const resolved = await this.resolveGroup(effectiveSenderId, groupCode);
     if (resolved.error) {
       await this.sendText(target, resolved.error);
       return;
     }
 
-    await this.userPrefsRepository.setPreferredGroup(senderId, resolved.group);
-    await this.userPrefsRepository.setRole(senderId, "student");
+    await this.clearPendingState(effectiveSenderId, target);
+    await this.userPrefsRepository.setPreferredGroup(effectiveSenderId, resolved.group);
+    await this.userPrefsRepository.setRole(effectiveSenderId, "student");
     await this.sendText(
       target,
       `Группа выбрана: ${resolved.group.name} (код: ${resolved.group.code})`,
-      { attachments: this.mainMenuKeyboard("student") }
+      { attachments: this.mainMenuKeyboard("student"), senderId: effectiveSenderId }
     );
   }
 
@@ -655,10 +711,14 @@ class MaxBotService {
    *
    * @param {{chatId?: string|number, userId?: string|number}} target
    * @param {string} senderId
-   * @param {string} token
+   * @param {string} payload
    * @returns {Promise<void>}
    */
-  async handlePickTeacherFromCallback(target, senderId, token) {
+  async handlePickTeacherFromCallback(target, senderId, payload) {
+    const [teacherToken, senderToken] = String(payload || "").split(":");
+    const token = String(teacherToken || "").trim();
+    const senderFromToken = decodeToken(senderToken);
+    const effectiveSenderId = senderFromToken || senderId;
     const decoded = decodeToken(token);
     if (!decoded) {
       await this.sendText(target, "Не удалось определить преподавателя. Попробуйте снова.");
@@ -675,10 +735,12 @@ class MaxBotService {
       return;
     }
 
-    await this.userPrefsRepository.setPreferredTeacher(senderId, teacher);
-    await this.userPrefsRepository.setRole(senderId, "teacher");
+    await this.clearPendingState(effectiveSenderId, target);
+    await this.userPrefsRepository.setPreferredTeacher(effectiveSenderId, teacher);
+    await this.userPrefsRepository.setRole(effectiveSenderId, "teacher");
     await this.sendText(target, `Преподаватель выбран: ${teacher.name}`, {
-      attachments: this.mainMenuKeyboard("teacher")
+      attachments: this.mainMenuKeyboard("teacher"),
+      senderId: effectiveSenderId
     });
   }
 
@@ -834,6 +896,45 @@ class MaxBotService {
   }
 
   /**
+   * Persist and cache pending wizard state.
+   *
+   * @param {string} senderId
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} action
+   * @returns {Promise<void>}
+   */
+  async setPendingState(senderId, target, action) {
+    if (senderId) {
+      await this.userPrefsRepository.setPendingAction(senderId, action);
+    }
+
+    const key = this.targetKey(target);
+    if (key) {
+      this.pendingByTarget.set(key, {
+        action,
+        senderId: senderId || "",
+        updatedAt: Date.now()
+      });
+    }
+  }
+
+  /**
+   * Clear pending wizard state in DB and in-memory cache.
+   *
+   * @param {string} senderId
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @returns {Promise<void>}
+   */
+  async clearPendingState(senderId, target) {
+    if (senderId) {
+      await this.userPrefsRepository.clearPendingAction(senderId);
+    }
+
+    const key = this.targetKey(target);
+    if (key) this.pendingByTarget.delete(key);
+  }
+
+  /**
    * Handle text in the context of pending multi-step selection flow.
    *
    * @param {{senderId: string, target: {chatId?: string|number, userId?: string|number}, text: string}} params
@@ -841,7 +942,9 @@ class MaxBotService {
    */
   async handlePendingTextInput({ senderId, target, text }) {
     const pref = await this.userPrefsRepository.getByUserId(senderId);
-    const pendingAction = pref?.pendingAction;
+    const targetKey = this.targetKey(target);
+    const pendingByTarget = targetKey ? this.pendingByTarget.get(targetKey) : null;
+    const pendingAction = pref?.pendingAction || pendingByTarget?.action || "";
     if (!pendingAction) return false;
 
     const input = String(text || "").trim();
@@ -849,7 +952,7 @@ class MaxBotService {
 
     const lower = input.toLowerCase();
     if (lower === "отмена" || lower === "cancel") {
-      await this.userPrefsRepository.clearPendingAction(senderId);
+      await this.clearPendingState(senderId, target);
       await this.sendText(target, "Выбор отменен.");
       return true;
     }
@@ -876,10 +979,11 @@ class MaxBotService {
    */
   async startGroupPicker(target, senderId) {
     await this.userPrefsRepository.setRole(senderId, "student");
-    await this.userPrefsRepository.setPendingAction(senderId, "await_group_query");
+    await this.setPendingState(senderId, target, "await_group_query");
     await this.sendText(
       target,
-      "Введите часть названия группы или код группы.\nПример: `исп-9.15` или `60`.\nДля отмены напишите: `отмена`."
+      "Введите часть названия группы или код группы.\nПример: `исп-9.15` или `60`.\nДля отмены напишите: `отмена`.",
+      { noMenu: true, senderId }
     );
   }
 
@@ -892,10 +996,11 @@ class MaxBotService {
    */
   async startTeacherPicker(target, senderId) {
     await this.userPrefsRepository.setRole(senderId, "teacher");
-    await this.userPrefsRepository.setPendingAction(senderId, "await_teacher_query");
+    await this.setPendingState(senderId, target, "await_teacher_query");
     await this.sendText(
       target,
-      "Введите фамилию или часть ФИО преподавателя.\nПример: `тигова`.\nДля отмены напишите: `отмена`."
+      "Введите фамилию или часть ФИО преподавателя.\nПример: `тигова`.\nДля отмены напишите: `отмена`.",
+      { noMenu: true, senderId }
     );
   }
 
@@ -920,27 +1025,32 @@ class MaxBotService {
     );
 
     if (!filtered.length) {
-      await this.sendText(target, "Ничего не найдено. Уточните запрос или введите `отмена`.");
+      await this.sendText(target, "Ничего не найдено. Уточните запрос или введите `отмена`.", {
+        noMenu: true,
+        senderId
+      });
       return;
     }
 
     if (filtered.length === 1) {
+      await this.clearPendingState(senderId, target);
       await this.userPrefsRepository.setPreferredGroup(senderId, filtered[0]);
       await this.userPrefsRepository.setRole(senderId, "student");
       await this.sendText(
         target,
         `Группа выбрана: ${filtered[0].name} (код: ${filtered[0].code})`,
-        { attachments: this.mainMenuKeyboard("student") }
+        { attachments: this.mainMenuKeyboard("student"), senderId }
       );
       return;
     }
 
     const limit = 12;
+    const senderToken = encodeToken(senderId);
     const buttons = filtered.slice(0, limit).map((group) => [
       {
         type: "callback",
         text: `${group.name} (${group.code})`,
-        payload: `cmd:pickg:${group.code}`
+        payload: `cmd:pickg:${group.code}:${senderToken}`
       }
     ]);
 
@@ -955,7 +1065,9 @@ class MaxBotService {
           type: "inline_keyboard",
           payload: { buttons }
         }
-      ]
+      ],
+      noMenu: true,
+      senderId
     });
   }
 
@@ -982,27 +1094,33 @@ class MaxBotService {
     );
 
     if (!filtered.length) {
-      await this.sendText(target, "Ничего не найдено. Уточните запрос или введите `отмена`.");
+      await this.sendText(target, "Ничего не найдено. Уточните запрос или введите `отмена`.", {
+        noMenu: true,
+        senderId
+      });
       return;
     }
 
     if (filtered.length === 1) {
+      await this.clearPendingState(senderId, target);
       await this.userPrefsRepository.setPreferredTeacher(senderId, filtered[0]);
       await this.userPrefsRepository.setRole(senderId, "teacher");
       await this.sendText(target, `Преподаватель выбран: ${filtered[0].name}`, {
-        attachments: this.mainMenuKeyboard("teacher")
+        attachments: this.mainMenuKeyboard("teacher"),
+        senderId
       });
       return;
     }
 
     const limit = 12;
+    const senderToken = encodeToken(senderId);
     const buttons = filtered.slice(0, limit).map((teacher) => {
       const token = encodeToken(teacher.code ? `code:${teacher.code}` : `key:${teacher.key}`);
       return [
         {
           type: "callback",
           text: teacher.name,
-          payload: `cmd:pickt:${token}`
+          payload: `cmd:pickt:${token}:${senderToken}`
         }
       ];
     });
@@ -1018,7 +1136,9 @@ class MaxBotService {
           type: "inline_keyboard",
           payload: { buttons }
         }
-      ]
+      ],
+      noMenu: true,
+      senderId
     });
   }
 
@@ -1272,6 +1392,7 @@ class MaxBotService {
 
     await this.userPrefsRepository.setPreferredGroup(senderId, resolved.group);
     await this.userPrefsRepository.setRole(senderId, "student");
+    await this.clearPendingState(senderId, target);
     await this.sendText(
       target,
       `Группа по умолчанию сохранена: ${resolved.group.name} (код: ${resolved.group.code})`
@@ -1321,6 +1442,7 @@ class MaxBotService {
 
     await this.userPrefsRepository.setPreferredTeacher(senderId, resolved.teacher);
     await this.userPrefsRepository.setRole(senderId, "teacher");
+    await this.clearPendingState(senderId, target);
     await this.sendText(target, `Преподаватель по умолчанию сохранен: ${resolved.teacher.name}`);
   }
 

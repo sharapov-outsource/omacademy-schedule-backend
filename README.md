@@ -195,6 +195,7 @@ For better UX, menu includes `Выбрать группу` / `Выбрать п�
 - click button
 - type search text (name/code)
 - choose from returned inline buttons
+- menu keyboard is shown automatically in regular replies; during wizard input step only search prompt is shown
 
 ### Bot configuration variables
 
