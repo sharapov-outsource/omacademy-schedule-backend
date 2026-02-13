@@ -41,5 +41,9 @@ module.exports = {
   maxWebhookSecret: process.env.MAX_WEBHOOK_SECRET || "",
   maxWebhookSecretHeader: process.env.MAX_WEBHOOK_SECRET_HEADER || "x-max-bot-api-secret",
   maxWebhookPublicUrl: process.env.MAX_WEBHOOK_PUBLIC_URL || "",
-  maxAdminUserIds: toList(process.env.MAX_ADMIN_USER_IDS)
+  maxAdminUserIds: toList(process.env.MAX_ADMIN_USER_IDS),
+  reminderEnabled: toBool(process.env.REMINDER_ENABLED, true),
+  reminderCron: process.env.REMINDER_CRON || "* * * * *",
+  reminderLessonStartTimes:
+    process.env.REMINDER_LESSON_START_TIMES || "1=08:30,2=10:15,3=12:10,4=13:55,5=15:40,6=17:25"
 };

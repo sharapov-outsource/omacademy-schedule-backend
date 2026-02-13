@@ -7,6 +7,7 @@ class ScheduleRepository {
     this.groups = db.collection("groups");
     this.teachers = db.collection("teachers");
     this.lessons = db.collection("lessons");
+    this.reminderLogs = db.collection("reminderLogs");
     this.meta = db.collection("meta");
     this.syncRuns = db.collection("syncRuns");
   }
@@ -39,6 +40,8 @@ class ScheduleRepository {
     await this.lessons.createIndex({ syncId: 1, groupName: 1, date: 1, lessonNumber: 1 });
     await this.lessons.createIndex({ syncId: 1, teacher: 1 });
     await this.lessons.createIndex({ syncId: 1, room: 1 });
+    await this.reminderLogs.createIndex({ reminderKey: 1 }, { unique: true, name: "uniq_reminder_key" });
+    await this.reminderLogs.createIndex({ createdAt: -1 }, { name: "idx_reminder_created_at" });
 
     await this.syncRuns.createIndex({ startedAt: -1 });
   }
@@ -251,6 +254,25 @@ class ScheduleRepository {
    */
   async getLastSyncRun() {
     return this.syncRuns.find().sort({ startedAt: -1 }).limit(1).next();
+  }
+
+  /**
+   * Persist reminder delivery marker and skip duplicates.
+   *
+   * @param {{reminderKey: string, userId: string, role: string, daysBefore: number, date: string, lessonNumber: number, targetRef: string}} payload
+   * @returns {Promise<boolean>} true when inserted, false when duplicate
+   */
+  async registerReminderSend(payload) {
+    try {
+      await this.reminderLogs.insertOne({
+        ...payload,
+        createdAt: new Date()
+      });
+      return true;
+    } catch (error) {
+      if (error && error.code === 11000) return false;
+      throw error;
+    }
   }
 }
 

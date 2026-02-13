@@ -7,6 +7,7 @@ const { connectMongo } = require("./db");
 const { OmAcademyScraper } = require("./scraper");
 const { ScheduleRepository } = require("./repository");
 const { SyncService } = require("./syncService");
+const { ReminderService } = require("./reminderService");
 const { MaxBotService } = require("./max/botService");
 const { registerMaxWebhookRoute } = require("./max/webhook");
 
@@ -26,6 +27,7 @@ async function bootstrap() {
 
   const syncService = new SyncService({ scraper, repository, logger });
   let maxBotService = null;
+  let reminderService = null;
 
   const app = express();
   app.use(express.json());
@@ -48,6 +50,20 @@ async function bootstrap() {
     });
 
     await maxBotService.init();
+
+    if (config.reminderEnabled) {
+      reminderService = new ReminderService({
+        db,
+        scheduleRepository: repository,
+        logger,
+        token: config.maxBotToken,
+        apiBaseUrl: config.maxApiBaseUrl,
+        timeoutMs: config.httpTimeoutMs,
+        timezone: config.syncTimezone,
+        lessonStartTimes: config.reminderLessonStartTimes
+      });
+    }
+
     registerMaxWebhookRoute(app, {
       botService: maxBotService,
       logger,
@@ -132,6 +148,18 @@ async function bootstrap() {
     { timezone: config.syncTimezone }
   );
 
+  if (reminderService) {
+    cron.schedule(
+      config.reminderCron,
+      () => {
+        reminderService.runTick().catch((error) => {
+          logger.error("Reminder tick failed", { error: error.message });
+        });
+      },
+      { timezone: config.syncTimezone }
+    );
+  }
+
   if (config.runSyncOnStartup) {
     syncService.run("startup").catch((error) => {
       logger.error("Startup sync failed", { error: error.message });
@@ -143,6 +171,9 @@ async function bootstrap() {
     logger.info(`Daily sync cron: ${config.syncCron} (${config.syncTimezone})`);
     if (config.maxBotEnabled) {
       logger.info(`MAX webhook enabled on path: ${config.maxWebhookPath}`);
+      if (config.reminderEnabled) {
+        logger.info(`Reminder cron: ${config.reminderCron} (${config.syncTimezone})`);
+      }
     }
   });
 

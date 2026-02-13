@@ -16,6 +16,7 @@ Source website:
 - Supports manual sync via API endpoint
 - Exposes REST API for schedule queries
 - Includes a ready-to-run MAX messenger bot (webhook mode)
+- Supports reminder subscriptions in MAX bot (1 or 2 days before lesson start)
 
 ## What Gets Parsed
 
@@ -98,6 +99,9 @@ SYNC_TIMEZONE=Asia/Omsk
 RUN_SYNC_ON_STARTUP=true
 HTTP_TIMEOUT_MS=20000
 MAX_CONCURRENT_REQUESTS=5
+REMINDER_ENABLED=true
+REMINDER_CRON=* * * * *
+REMINDER_LESSON_START_TIMES=1=08:30,2=10:15,3=12:10,4=13:55,5=15:40,6=17:25
 ```
 
 ### 3. Build and start containers
@@ -188,6 +192,8 @@ Supported bot commands:
 - `/завтра [groupCode|groupName|teacherName]` (`/tomorrow`)
 - `/дата <YYYY-MM-DD> [groupCode|groupName|teacherName]` (`/date`)
 - `/следующая [groupCode|groupName|teacherName]` (`/next`)
+- `/напоминание` (`/reminder`) - show reminder status + quick buttons
+- `/напоминание 1|2|1,2|выкл` (`/reminder 1|2|1,2|off`) - configure reminders
 - `/обновить` (`/sync`, admin only)
 
 The bot asks user role on first start (`Студент` or `Преподаватель`) and shows role-specific inline keyboard.
@@ -210,12 +216,35 @@ MAX_WEBHOOK_SECRET=your_random_secret
 MAX_WEBHOOK_SECRET_HEADER=x-max-bot-api-secret
 MAX_WEBHOOK_PUBLIC_URL=https://your-domain.example
 MAX_ADMIN_USER_IDS=12345,67890
+REMINDER_ENABLED=true
+REMINDER_CRON=* * * * *
+REMINDER_LESSON_START_TIMES=1=08:30,2=10:15,3=12:10,4=13:55,5=15:40,6=17:25
 ```
 
 Notes:
 - `MAX_WEBHOOK_PUBLIC_URL` must be public HTTPS.
 - `MAX_WEBHOOK_PATH` must match your Express route and webhook registration URL.
 - `MAX_ADMIN_USER_IDS` controls who can run `/sync` from chat. If empty, everyone can run it.
+- `REMINDER_ENABLED` enables reminder scheduler (default: `true`).
+- `REMINDER_CRON` controls how often reminder checks run (default: every minute).
+- `REMINDER_LESSON_START_TIMES` maps lesson number to start time in `HH:MM` format.
+
+### Reminder subscriptions
+
+Users can subscribe to reminders for their saved default target:
+- student mode: reminders are based on selected default group
+- teacher mode: reminders are based on selected default teacher
+
+Reminder timing options:
+- `1` - notify at lesson start time one day before
+- `2` - notify at lesson start time two days before
+- `1,2` - both
+- `выкл` - disable
+
+How users configure reminders:
+- command: `/напоминание` (opens status + settings)
+- command: `/напоминание 1`, `/напоминание 2`, `/напоминание 1,2`, `/напоминание выкл`
+- button: `Напоминания` in main menu, then tap quick setting buttons
 
 ### Enable and run bot
 
@@ -260,6 +289,7 @@ npm run max:webhook:delete
 6. Switch role with `/преподаватель`, run `/преподаватели тигова`, then `/препод Тигова А.Ю.` and `/сегодня`.
 7. Use button `Выбрать преподавателя`, type `тигова`, and click teacher button.
 8. If needed, run `/обновить` (admin user only when `MAX_ADMIN_USER_IDS` is set).
+9. Open `Напоминания` and enable `За 1 день` or `За 1 и 2 дня`.
 
 ### Troubleshooting bot setup
 

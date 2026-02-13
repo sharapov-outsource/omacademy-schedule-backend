@@ -89,7 +89,11 @@ const COMMAND_ALIASES = {
   "ближайшая": "next",
   sync: "sync",
   "синк": "sync",
-  "обновить": "sync"
+  "обновить": "sync",
+  reminder: "reminder",
+  reminders: "reminder",
+  "напоминание": "reminder",
+  "напоминания": "reminder"
 };
 
 function resolveCommandAlias(command) {
@@ -109,6 +113,7 @@ const CALLBACK_ACTIONS = {
   myteacher: "myteacher",
   groups: "groups",
   teachers: "teachers",
+  reminder: "reminder",
   help: "help",
   sync: "sync"
 };
@@ -529,6 +534,7 @@ class MaxBotService {
               callbackButton("Мой преподаватель", "myteacher", senderId),
               callbackButton("Преподаватели", "teachers", senderId)
             ],
+            [callbackButton("Напоминания", "reminder", senderId)],
             [callbackButton("Я студент", "student", senderId)],
             [
               callbackButton("Помощь", "help", senderId),
@@ -548,6 +554,7 @@ class MaxBotService {
               callbackButton("Моя группа", "mygroup", senderId),
               callbackButton("Группы", "groups", senderId)
             ],
+            [callbackButton("Напоминания", "reminder", senderId)],
             [callbackButton("Я преподаватель", "teacher", senderId)],
             [
               callbackButton("Помощь", "help", senderId),
@@ -581,6 +588,8 @@ class MaxBotService {
       "- `/роль` - выбор режима",
       "- `/студент` - режим студента",
       "- `/преподаватель` - режим преподавателя",
+      "- `/напоминание` - статус напоминаний",
+      "- `/напоминание 1|2|1,2|выкл` - настройка напоминаний",
       "- `/обновить` (`/sync`) - принудительный sync (только admin)"
     ];
 
@@ -673,6 +682,17 @@ class MaxBotService {
       const payload = commandRaw.slice("pickt:".length).trim();
       await this.safeAnswerCallback(callbackId, "Выбрано");
       await this.handlePickTeacherFromCallback(target, callbackSenderId, payload);
+      return;
+    }
+
+    if (String(commandRaw || "").toLowerCase().startsWith("remset:")) {
+      const [, modeRaw, senderToken] = String(commandRaw || "").split(":");
+      const mode = String(modeRaw || "").trim().toLowerCase();
+      const senderFromToken = decodeToken(senderToken);
+      const effectiveSenderId = senderFromToken || callbackSenderId;
+      this.rememberTargetSender(target, effectiveSenderId);
+      await this.safeAnswerCallback(callbackId, "Готово");
+      await this.handleReminderCommand(target, effectiveSenderId, mode ? [mode] : []);
       return;
     }
 
@@ -927,6 +947,10 @@ class MaxBotService {
         await this.handleStudentNextCommand(target, senderId, args);
         return;
       }
+
+      case "reminder":
+        await this.handleReminderCommand(target, senderId, args);
+        return;
 
       case "sync":
         await this.handleSyncCommand(target, senderId);
@@ -1749,6 +1773,193 @@ class MaxBotService {
     ].join("\n");
 
     await this.sendText(target, message);
+  }
+
+  /**
+   * Parse reminder command args into lead-day options.
+   *
+   * @param {string[]} args
+   * @returns {number[]|null}
+   */
+  parseReminderDays(args) {
+    const raw = args.join(" ").trim().toLowerCase();
+    if (!raw) return null;
+
+    const compact = raw.replace(/\s+/g, "");
+    const offSet = new Set(["0", "off", "disable", "выкл", "выключить", "нет", "stop"]);
+    if (offSet.has(compact)) return [];
+
+    if (compact === "1") return [1];
+    if (compact === "2") return [2];
+
+    if (compact === "1,2" || compact === "2,1" || compact === "12" || compact === "21") {
+      return [1, 2];
+    }
+
+    const tokens = raw
+      .split(/[\s,;]+/)
+      .map((token) => token.trim())
+      .filter(Boolean);
+
+    const parsed = new Set();
+    tokens.forEach((token) => {
+      if (token === "1") parsed.add(1);
+      if (token === "2") parsed.add(2);
+    });
+
+    if (!parsed.size) return null;
+    return Array.from(parsed).sort((a, b) => a - b);
+  }
+
+  /**
+   * Build human-readable reminder status line.
+   *
+   * @param {Record<string, any>|null} pref
+   * @returns {string}
+   */
+  buildReminderStatus(pref) {
+    if (!pref?.reminderEnabled || !Array.isArray(pref.reminderDaysBefore) || !pref.reminderDaysBefore.length) {
+      return "Напоминания: выключены.";
+    }
+
+    const labels = pref.reminderDaysBefore
+      .map((value) => Number.parseInt(value, 10))
+      .filter((value) => value === 1 || value === 2)
+      .sort((a, b) => a - b)
+      .map((value) => (value === 1 ? "за 1 день" : "за 2 дня"));
+
+    if (!labels.length) return "Напоминания: выключены.";
+    return `Напоминания: включены (${labels.join(", ")}).`;
+  }
+
+  /**
+   * Build inline keyboard for reminder settings.
+   *
+   * @param {string} senderId
+   * @param {Record<string, any>|null} pref
+   * @returns {Array<Record<string, any>>}
+   */
+  reminderSettingsKeyboard(senderId, pref) {
+    const enabled = Boolean(pref?.reminderEnabled);
+    const days = new Set(
+      enabled
+        ? (pref?.reminderDaysBefore || [])
+            .map((value) => Number.parseInt(value, 10))
+            .filter((value) => value === 1 || value === 2)
+        : []
+    );
+
+    const only1 = days.has(1) && !days.has(2);
+    const only2 = !days.has(1) && days.has(2);
+    const both = days.has(1) && days.has(2);
+    const disabled = !enabled || days.size === 0;
+    const mark = (active, label) => (active ? `✅ ${label}` : label);
+
+    return [
+      {
+        type: "inline_keyboard",
+        payload: {
+          buttons: [
+            [
+              {
+                type: "callback",
+                text: mark(only1, "За 1 день"),
+                payload: `cmd:remset:1:${encodeToken(senderId)}`
+              },
+              {
+                type: "callback",
+                text: mark(only2, "За 2 дня"),
+                payload: `cmd:remset:2:${encodeToken(senderId)}`
+              }
+            ],
+            [
+              {
+                type: "callback",
+                text: mark(both, "За 1 и 2 дня"),
+                payload: `cmd:remset:1,2:${encodeToken(senderId)}`
+              }
+            ],
+            [
+              {
+                type: "callback",
+                text: mark(disabled, "Выключить"),
+                payload: `cmd:remset:off:${encodeToken(senderId)}`
+              }
+            ],
+            [callbackButton("Меню", "help", senderId)]
+          ]
+        }
+      }
+    ];
+  }
+
+  /**
+   * Handle reminder settings command.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string[]} args
+   * @returns {Promise<void>}
+   */
+  async handleReminderCommand(target, senderId, args) {
+    const pref = await this.userPrefsRepository.getByUserId(senderId);
+    const role = pref?.role === "teacher" ? "teacher" : pref?.role === "student" ? "student" : null;
+
+    if (!role) {
+      await this.sendText(
+        target,
+        "Сначала выберите роль: `/студент` или `/преподаватель`, затем настройте напоминания."
+      );
+      return;
+    }
+
+    if (role === "student" && !pref?.preferredGroupCode) {
+      await this.sendText(target, "Сначала выберите группу (`/группа <код>` или кнопка `Выбрать группу`).");
+      return;
+    }
+
+    if (role === "teacher" && !pref?.preferredTeacherName && !pref?.preferredTeacherKey) {
+      await this.sendText(
+        target,
+        "Сначала выберите преподавателя (`/препод <ФИО>` или кнопка `Выбрать преподавателя`)."
+      );
+      return;
+    }
+
+    const parsedDays = this.parseReminderDays(args);
+    if (parsedDays === null) {
+      const status = this.buildReminderStatus(pref);
+      await this.sendText(
+        target,
+        [
+          status,
+          "",
+          "Настройка:",
+          "- `/напоминание 1` — за 1 день",
+          "- `/напоминание 2` — за 2 дня",
+          "- `/напоминание 1,2` — за 1 и 2 дня",
+          "- `/напоминание выкл` — отключить"
+        ].join("\n"),
+        {
+          attachments: this.reminderSettingsKeyboard(senderId, pref),
+          noMenu: true,
+          senderId
+        }
+      );
+      return;
+    }
+
+    await this.userPrefsRepository.setReminderSettings(senderId, {
+      enabled: parsedDays.length > 0,
+      daysBefore: parsedDays
+    });
+
+    const updatedPref = await this.userPrefsRepository.getByUserId(senderId);
+    await this.sendText(target, this.buildReminderStatus(updatedPref), {
+      attachments: this.reminderSettingsKeyboard(senderId, updatedPref),
+      noMenu: true,
+      senderId
+    });
   }
 
   /**
