@@ -1,0 +1,19 @@
+{
+  "name": "omacademy-schedule-backend",
+  "version": "1.0.0",
+  "description": "Automatic parser and API for omacademy.ru schedule with MongoDB storage",
+  "main": "src/server.js",
+  "author": "Alexander S. <alexander@sharapov.biz>",
+  "scripts": {
+    "start": "node src/server.js",
+    "sync:once": "node src/manualSync.js"
+  },
+  "dependencies": {
+    "axios": "^1.8.4",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongodb": "^6.15.0",
+    "node-cron": "^4.0.7"
+  }
+}
