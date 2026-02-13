@@ -113,11 +113,12 @@ const CALLBACK_ACTIONS = {
   sync: "sync"
 };
 
-function callbackButton(text, action) {
+function callbackButton(text, action, senderId = "") {
+  const token = senderId ? `:${encodeToken(senderId)}` : "";
   return {
     type: "callback",
     text,
-    payload: `cmd:${action}`
+    payload: `cmd:${action}${token}`
   };
 }
 
@@ -143,10 +144,10 @@ function parseCallbackCommand(payload) {
   }
 
   if (raw.startsWith("cmd:")) {
-    return raw.slice(4).trim().toLowerCase();
+    return raw.slice(4).trim();
   }
 
-  return raw.toLowerCase();
+  return raw;
 }
 
 function teacherMatchKey(value) {
@@ -418,7 +419,9 @@ class MaxBotService {
 
     if (!attachments && !noMenu && effectiveSenderId) {
       const role = await this.getUserRole(effectiveSenderId);
-      attachments = role ? this.mainMenuKeyboard(role) : this.roleSelectionKeyboard();
+      attachments = role
+        ? this.mainMenuKeyboard(role, effectiveSenderId)
+        : this.roleSelectionKeyboard(effectiveSenderId);
     }
 
     const chunks = splitLongMessage(text);
@@ -488,13 +491,16 @@ class MaxBotService {
    *
    * @returns {Array<Record<string, any>>}
    */
-  roleSelectionKeyboard() {
+  roleSelectionKeyboard(senderId = "") {
     return [
       {
         type: "inline_keyboard",
         payload: {
           buttons: [
-            [callbackButton("Я студент", "student"), callbackButton("Я преподаватель", "teacher")]
+            [
+              callbackButton("Я студент", "student", senderId),
+              callbackButton("Я преподаватель", "teacher", senderId)
+            ]
           ]
         }
       }
@@ -507,22 +513,46 @@ class MaxBotService {
    * @param {"student"|"teacher"} [role="student"]
    * @returns {Array<Record<string, any>>}
    */
-  mainMenuKeyboard(role = "student") {
+  mainMenuKeyboard(role = "student", senderId = "") {
     const roleButtons =
       role === "teacher"
         ? [
-            [callbackButton("Сегодня", "today"), callbackButton("Завтра", "tomorrow")],
-            [callbackButton("Следующая пара", "next"), callbackButton("Выбрать преподавателя", "pick_teacher")],
-            [callbackButton("Мой преподаватель", "myteacher"), callbackButton("Преподаватели", "teachers")],
-            [callbackButton("Я студент", "student")],
-            [callbackButton("Помощь", "help"), callbackButton("Обновить", "sync")]
+            [
+              callbackButton("Сегодня", "today", senderId),
+              callbackButton("Завтра", "tomorrow", senderId)
+            ],
+            [
+              callbackButton("Следующая пара", "next", senderId),
+              callbackButton("Выбрать преподавателя", "pick_teacher", senderId)
+            ],
+            [
+              callbackButton("Мой преподаватель", "myteacher", senderId),
+              callbackButton("Преподаватели", "teachers", senderId)
+            ],
+            [callbackButton("Я студент", "student", senderId)],
+            [
+              callbackButton("Помощь", "help", senderId),
+              callbackButton("Обновить", "sync", senderId)
+            ]
           ]
         : [
-            [callbackButton("Сегодня", "today"), callbackButton("Завтра", "tomorrow")],
-            [callbackButton("Следующая пара", "next"), callbackButton("Выбрать группу", "pick_group")],
-            [callbackButton("Моя группа", "mygroup"), callbackButton("Группы", "groups")],
-            [callbackButton("Я преподаватель", "teacher")],
-            [callbackButton("Помощь", "help"), callbackButton("Обновить", "sync")]
+            [
+              callbackButton("Сегодня", "today", senderId),
+              callbackButton("Завтра", "tomorrow", senderId)
+            ],
+            [
+              callbackButton("Следующая пара", "next", senderId),
+              callbackButton("Выбрать группу", "pick_group", senderId)
+            ],
+            [
+              callbackButton("Моя группа", "mygroup", senderId),
+              callbackButton("Группы", "groups", senderId)
+            ],
+            [callbackButton("Я преподаватель", "teacher", senderId)],
+            [
+              callbackButton("Помощь", "help", senderId),
+              callbackButton("Обновить", "sync", senderId)
+            ]
           ];
 
     return [
@@ -599,13 +629,13 @@ class MaxBotService {
     if (!role) {
       return {
         text: this.helpMessage(null),
-        attachments: this.roleSelectionKeyboard()
+        attachments: this.roleSelectionKeyboard(senderId)
       };
     }
 
     return {
       text: this.helpMessage(role),
-      attachments: this.mainMenuKeyboard(role)
+      attachments: this.mainMenuKeyboard(role, senderId)
     };
   }
 
@@ -621,39 +651,44 @@ class MaxBotService {
 
     const target = this.resolveTarget(update);
     const targetKey = this.targetKey(target);
-    const senderId =
+    const callbackSenderId =
       this.resolveSenderId(update) || (targetKey ? this.lastSenderByTarget.get(targetKey) || "" : "");
 
-    if (!senderId || !target) {
+    if (!callbackSenderId || !target) {
       await this.safeAnswerCallback(callbackId, "Не удалось обработать кнопку.");
       return;
     }
-    this.rememberTargetSender(target, senderId);
 
-    const command = parseCallbackCommand(update?.callback?.payload || update?.payload);
+    const commandRaw = parseCallbackCommand(update?.callback?.payload || update?.payload);
+    const command = commandRaw.toLowerCase();
 
     if (command.startsWith("pickg:")) {
-      const payload = command.slice("pickg:".length).trim();
+      const payload = commandRaw.slice("pickg:".length).trim();
       await this.safeAnswerCallback(callbackId, "Выбрано");
-      await this.handlePickGroupFromCallback(target, senderId, payload);
+      await this.handlePickGroupFromCallback(target, callbackSenderId, payload);
       return;
     }
 
     if (command.startsWith("pickt:")) {
-      const payload = command.slice("pickt:".length).trim();
+      const payload = commandRaw.slice("pickt:".length).trim();
       await this.safeAnswerCallback(callbackId, "Выбрано");
-      await this.handlePickTeacherFromCallback(target, senderId, payload);
+      await this.handlePickTeacherFromCallback(target, callbackSenderId, payload);
       return;
     }
 
-    const resolvedCommand = CALLBACK_ACTIONS[command];
+    const [actionRaw, senderToken] = String(commandRaw || "").split(":");
+    const senderFromToken = decodeToken(senderToken);
+    const effectiveSenderId = senderFromToken || callbackSenderId;
+    this.rememberTargetSender(target, effectiveSenderId);
+
+    const resolvedCommand = CALLBACK_ACTIONS[String(actionRaw || "").toLowerCase()];
     if (!resolvedCommand) {
       await this.safeAnswerCallback(callbackId, "Неизвестная кнопка.");
       return;
     }
 
     await this.safeAnswerCallback(callbackId, "Готово");
-    await this.handleCommand({ command: resolvedCommand, args: [], senderId, target });
+    await this.handleCommand({ command: resolvedCommand, args: [], senderId: effectiveSenderId, target });
   }
 
   /**
@@ -702,7 +737,7 @@ class MaxBotService {
     await this.sendText(
       target,
       `Группа выбрана: ${resolved.group.name} (код: ${resolved.group.code})`,
-      { attachments: this.mainMenuKeyboard("student"), senderId: effectiveSenderId }
+      { attachments: this.mainMenuKeyboard("student", effectiveSenderId), senderId: effectiveSenderId }
     );
   }
 
@@ -739,7 +774,7 @@ class MaxBotService {
     await this.userPrefsRepository.setPreferredTeacher(effectiveSenderId, teacher);
     await this.userPrefsRepository.setRole(effectiveSenderId, "teacher");
     await this.sendText(target, `Преподаватель выбран: ${teacher.name}`, {
-      attachments: this.mainMenuKeyboard("teacher"),
+      attachments: this.mainMenuKeyboard("teacher", effectiveSenderId),
       senderId: effectiveSenderId
     });
   }
@@ -763,21 +798,24 @@ class MaxBotService {
 
       case "role":
         await this.sendText(target, this.roleSelectionMessage(), {
-          attachments: this.roleSelectionKeyboard()
+          attachments: this.roleSelectionKeyboard(senderId),
+          senderId
         });
         return;
 
       case "student":
         await this.userPrefsRepository.setRole(senderId, "student");
         await this.sendText(target, "Режим переключен: Студент.", {
-          attachments: this.mainMenuKeyboard("student")
+          attachments: this.mainMenuKeyboard("student", senderId),
+          senderId
         });
         return;
 
       case "teacher":
         await this.userPrefsRepository.setRole(senderId, "teacher");
         await this.sendText(target, "Режим переключен: Преподаватель.", {
-          attachments: this.mainMenuKeyboard("teacher")
+          attachments: this.mainMenuKeyboard("teacher", senderId),
+          senderId
         });
         return;
 
@@ -817,7 +855,8 @@ class MaxBotService {
         const role = await this.getUserRole(senderId);
         if (!role) {
           await this.sendText(target, this.roleSelectionMessage(), {
-            attachments: this.roleSelectionKeyboard()
+            attachments: this.roleSelectionKeyboard(senderId),
+            senderId
           });
           return;
         }
@@ -835,7 +874,8 @@ class MaxBotService {
         const role = await this.getUserRole(senderId);
         if (!role) {
           await this.sendText(target, this.roleSelectionMessage(), {
-            attachments: this.roleSelectionKeyboard()
+            attachments: this.roleSelectionKeyboard(senderId),
+            senderId
           });
           return;
         }
@@ -854,7 +894,8 @@ class MaxBotService {
         const role = await this.getUserRole(senderId);
         if (!role) {
           await this.sendText(target, this.roleSelectionMessage(), {
-            attachments: this.roleSelectionKeyboard()
+            attachments: this.roleSelectionKeyboard(senderId),
+            senderId
           });
           return;
         }
@@ -872,7 +913,8 @@ class MaxBotService {
         const role = await this.getUserRole(senderId);
         if (!role) {
           await this.sendText(target, this.roleSelectionMessage(), {
-            attachments: this.roleSelectionKeyboard()
+            attachments: this.roleSelectionKeyboard(senderId),
+            senderId
           });
           return;
         }
@@ -1039,7 +1081,7 @@ class MaxBotService {
       await this.sendText(
         target,
         `Группа выбрана: ${filtered[0].name} (код: ${filtered[0].code})`,
-        { attachments: this.mainMenuKeyboard("student"), senderId }
+        { attachments: this.mainMenuKeyboard("student", senderId), senderId }
       );
       return;
     }
@@ -1106,7 +1148,7 @@ class MaxBotService {
       await this.userPrefsRepository.setPreferredTeacher(senderId, filtered[0]);
       await this.userPrefsRepository.setRole(senderId, "teacher");
       await this.sendText(target, `Преподаватель выбран: ${filtered[0].name}`, {
-        attachments: this.mainMenuKeyboard("teacher"),
+        attachments: this.mainMenuKeyboard("teacher", senderId),
         senderId
       });
       return;
