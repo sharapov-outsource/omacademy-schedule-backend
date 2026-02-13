@@ -5,13 +5,18 @@ class MaxApiClient {
    * @param {{token: string, apiBaseUrl?: string, timeoutMs?: number}} options
    */
   constructor({ token, apiBaseUrl = "https://platform-api.max.ru", timeoutMs = 20000 }) {
+    const normalizedToken = String(token || "")
+      .trim()
+      .replace(/^Bearer\s+/i, "");
+
     this.token = token;
     this.apiBaseUrl = apiBaseUrl.replace(/\/$/, "");
     this.http = axios.create({
       baseURL: this.apiBaseUrl,
       timeout: timeoutMs,
       headers: {
-        Authorization: `Bearer ${this.token}`,
+        // MAX API expects: Authorization: <token> (without Bearer prefix).
+        Authorization: normalizedToken,
         "Content-Type": "application/json"
       }
     });
