@@ -8,6 +8,7 @@ Source website:
 ## Features
 
 - Parses all groups from `cg.htm`
+- Parses all teachers from `cp.htm`
 - Opens each group page (`cgXXX.htm`) and extracts lessons
 - Stores normalized data in MongoDB (NoSQL)
 - Keeps an active snapshot of the latest sync
@@ -27,6 +28,11 @@ For each lesson, the backend saves:
 - subject (e.g. `МДК.03.02 Управление проектами (Лек)`)
 - room (e.g. `309`, `дист. обуч`, `обр.портал`)
 - teacher (e.g. `Шарапов Александр Евгеньевич`)
+
+For each teacher directory record, the backend saves:
+- teacher code from `cpXXX.htm`
+- teacher display name
+- source link to teacher page
 
 ## Tech Stack
 
@@ -169,16 +175,26 @@ The project contains a complete MAX bot implementation in:
 Supported bot commands:
 - `/помощь` (`/help`)
 - `/кнопки` (shows menu buttons, same as `/помощь`)
+- `/роль` (`/role`) - choose mode
+- `/студент` (`/student`) - switch to student mode
+- `/преподаватель` (`/teacher`) - switch to teacher mode
 - `/группы [query]` (`/groups`)
 - `/группа <groupCode|groupName>` (`/setgroup`)
 - `/моягруппа` (`/mygroup`)
-- `/сегодня [groupCode|groupName]` (`/today`)
-- `/завтра [groupCode|groupName]` (`/tomorrow`)
-- `/дата <YYYY-MM-DD> [groupCode|groupName]` (`/date`)
-- `/следующая [groupCode|groupName]` (`/next`)
+- `/преподаватели [query]` (`/teachers`)
+- `/препод <teacherName>` (`/setteacher`)
+- `/мойпрепод` (`/myteacher`)
+- `/сегодня [groupCode|groupName|teacherName]` (`/today`)
+- `/завтра [groupCode|groupName|teacherName]` (`/tomorrow`)
+- `/дата <YYYY-MM-DD> [groupCode|groupName|teacherName]` (`/date`)
+- `/следующая [groupCode|groupName|teacherName]` (`/next`)
 - `/обновить` (`/sync`, admin only)
 
-The bot also sends an inline keyboard with Russian quick actions (`Сегодня`, `Завтра`, `Следующая пара`, `Моя группа`, `Группы`, `Обновить`, `Помощь`) on `/помощь` and `/start`.
+The bot asks user role on first start (`Студент` or `Преподаватель`) and shows role-specific inline keyboard.
+For better UX, menu includes `Выбрать группу` / `Выбрать преподавателя` buttons:
+- click button
+- type search text (name/code)
+- choose from returned inline buttons
 
 ### Bot configuration variables
 
@@ -238,9 +254,11 @@ npm run max:webhook:delete
 1. Open your bot in MAX messenger.
 2. Send `/помощь` and verify command list is returned.
 3. Send `/группы исп-9.15` and check that group appears.
-4. Send `/группа 60`.
+4. Use button `Выбрать группу`, type `исп-9.15`, and click group button.
 5. Send `/сегодня` or `/дата 2026-02-14`.
-6. If needed, run `/обновить` (admin user only when `MAX_ADMIN_USER_IDS` is set).
+6. Switch role with `/преподаватель`, run `/преподаватели тигова`, then `/препод Тигова А.Ю.` and `/сегодня`.
+7. Use button `Выбрать преподавателя`, type `тигова`, and click teacher button.
+8. If needed, run `/обновить` (admin user only when `MAX_ADMIN_USER_IDS` is set).
 
 ### Troubleshooting bot setup
 
@@ -262,6 +280,12 @@ Returns service health and current active sync ID.
 
 ### `GET /api/groups`
 Returns active list of groups.
+
+### `GET /api/teachers`
+Returns active list of teachers.
+
+Supported query params:
+- `query` (substring search by teacher name)
 
 ### `GET /api/schedule`
 Returns lessons from the active snapshot.
@@ -317,6 +341,16 @@ Returns current sync state, last error (if any), and latest run metadata.
 ## Data Model (MongoDB)
 
 ### `groups`
+- `code`
+- `name`
+- `href`
+- `url`
+- `lastSeenSyncId`
+- `sourceUpdatedAt`
+- `updatedAt`
+
+### `teachers`
+- `key`
 - `code`
 - `name`
 - `href`

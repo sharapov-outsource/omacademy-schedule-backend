@@ -65,10 +65,12 @@ class SyncService {
 
       // Parse every group page, then atomically publish a new active snapshot.
       const { groups: normalizedGroups, lessons } = await this.scraper.fetchAllLessons(groups);
+      const teachers = await this.buildTeachersSnapshot(lessons);
 
       await this.repository.saveSnapshot({
         syncId,
         groups: normalizedGroups,
+        teachers,
         lessons,
         sourceUpdatedAt
       });
@@ -81,6 +83,7 @@ class SyncService {
         startedAt,
         finishedAt,
         groupsCount: normalizedGroups.length,
+        teachersCount: teachers.length,
         lessonsCount: lessons.length,
         sourceUpdatedAt
       };
@@ -88,6 +91,7 @@ class SyncService {
       await this.repository.finishSyncRun(syncId, {
         status: "success",
         groupsCount: result.groupsCount,
+        teachersCount: result.teachersCount,
         lessonsCount: result.lessonsCount,
         sourceUpdatedAt: sourceUpdatedAt ? new Date(sourceUpdatedAt) : null
       });
@@ -113,6 +117,54 @@ class SyncService {
     } finally {
       this.running = false;
     }
+  }
+
+  /**
+   * Build teacher snapshot from source list and fallback values from parsed lessons.
+   *
+   * @param {Array<Record<string, any>>} lessons
+   * @returns {Promise<Array<Record<string, any>>>}
+   */
+  async buildTeachersSnapshot(lessons) {
+    const map = new Map();
+
+    try {
+      const payload = await this.scraper.fetchTeachers();
+      payload.teachers.forEach((teacher) => {
+        const key = `cp:${teacher.code}`;
+        map.set(key, {
+          key,
+          code: teacher.code,
+          name: teacher.name,
+          href: teacher.href,
+          url: teacher.url
+        });
+      });
+    } catch (error) {
+      // Teacher list should not block sync, because lessons already include teacher names.
+      this.logger.warn("Teacher list fetch failed, using lessons fallback", {
+        error: error.message
+      });
+    }
+
+    lessons.forEach((lesson) => {
+      const teacherName = String(lesson.teacher || "").trim();
+      if (!teacherName) return;
+
+      const normalizedName = teacherName.toLowerCase();
+      const key = `name:${normalizedName}`;
+      if (map.has(key)) return;
+
+      map.set(key, {
+        key,
+        code: null,
+        name: teacherName,
+        href: null,
+        url: null
+      });
+    });
+
+    return Array.from(map.values());
   }
 }
 

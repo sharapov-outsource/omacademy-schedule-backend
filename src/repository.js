@@ -5,6 +5,7 @@ class ScheduleRepository {
   constructor(db) {
     this.db = db;
     this.groups = db.collection("groups");
+    this.teachers = db.collection("teachers");
     this.lessons = db.collection("lessons");
     this.meta = db.collection("meta");
     this.syncRuns = db.collection("syncRuns");
@@ -19,6 +20,8 @@ class ScheduleRepository {
     // Groups are uniquely identified by code from cgXXX.htm.
     await this.groups.createIndex({ code: 1 }, { unique: true, name: "uniq_group_code" });
     await this.groups.createIndex({ lastSeenSyncId: 1, name: 1 });
+    await this.teachers.createIndex({ key: 1 }, { unique: true, name: "uniq_teacher_key" });
+    await this.teachers.createIndex({ lastSeenSyncId: 1, name: 1 });
 
     await this.lessons.createIndex(
       {
@@ -78,10 +81,10 @@ class ScheduleRepository {
   /**
    * Store a complete synchronization snapshot and promote it as active.
    *
-   * @param {{syncId: string, groups: Array<Record<string, any>>, lessons: Array<Record<string, any>>, sourceUpdatedAt: string|null}} params
+   * @param {{syncId: string, groups: Array<Record<string, any>>, teachers?: Array<Record<string, any>>, lessons: Array<Record<string, any>>, sourceUpdatedAt: string|null}} params
    * @returns {Promise<void>}
    */
-  async saveSnapshot({ syncId, groups, lessons, sourceUpdatedAt }) {
+  async saveSnapshot({ syncId, groups, teachers = [], lessons, sourceUpdatedAt }) {
     const now = new Date();
 
     if (groups.length > 0) {
@@ -94,6 +97,30 @@ class ScheduleRepository {
                 name: group.name,
                 href: group.href,
                 url: group.url,
+                lastSeenSyncId: syncId,
+                sourceUpdatedAt: sourceUpdatedAt ? new Date(sourceUpdatedAt) : null,
+                updatedAt: now
+              }
+            },
+            upsert: true
+          }
+        })),
+        { ordered: false }
+      );
+    }
+
+    if (teachers.length > 0) {
+      await this.teachers.bulkWrite(
+        teachers.map((teacher) => ({
+          updateOne: {
+            filter: { key: teacher.key },
+            update: {
+              $set: {
+                key: teacher.key,
+                code: teacher.code || null,
+                name: teacher.name,
+                href: teacher.href || null,
+                url: teacher.url || null,
                 lastSeenSyncId: syncId,
                 sourceUpdatedAt: sourceUpdatedAt ? new Date(sourceUpdatedAt) : null,
                 updatedAt: now
@@ -150,6 +177,7 @@ class ScheduleRepository {
     // Keep only the currently active snapshot for fast read queries.
     await this.lessons.deleteMany({ syncId: { $ne: syncId } });
     await this.groups.deleteMany({ lastSeenSyncId: { $ne: syncId } });
+    await this.teachers.deleteMany({ lastSeenSyncId: { $ne: syncId } });
   }
 
   /**
@@ -171,6 +199,21 @@ class ScheduleRepository {
     if (!meta?.activeSyncId) return [];
 
     return this.groups
+      .find({ lastSeenSyncId: meta.activeSyncId })
+      .sort({ name: 1 })
+      .toArray();
+  }
+
+  /**
+   * Get active teachers from the latest synchronized snapshot.
+   *
+   * @returns {Promise<Array<Record<string, any>>>}
+   */
+  async getActiveTeachers() {
+    const meta = await this.getActiveSyncMeta();
+    if (!meta?.activeSyncId) return [];
+
+    return this.teachers
       .find({ lastSeenSyncId: meta.activeSyncId })
       .sort({ name: 1 })
       .toArray();

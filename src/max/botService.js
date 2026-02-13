@@ -56,6 +56,12 @@ const COMMAND_ALIASES = {
   "помощь": "help",
   "меню": "help",
   "кнопки": "help",
+  role: "role",
+  "роль": "role",
+  student: "student",
+  "студент": "student",
+  teacher: "teacher",
+  "преподаватель": "teacher",
   groups: "groups",
   "группы": "groups",
   setgroup: "setgroup",
@@ -63,6 +69,14 @@ const COMMAND_ALIASES = {
   mygroup: "mygroup",
   "моягруппа": "mygroup",
   "моя_группа": "mygroup",
+  teachers: "teachers",
+  "преподаватели": "teachers",
+  setteacher: "setteacher",
+  "препод": "setteacher",
+  "преп": "setteacher",
+  myteacher: "myteacher",
+  "мойпрепод": "myteacher",
+  "мойпреподаватель": "myteacher",
   today: "today",
   "сегодня": "today",
   tomorrow: "tomorrow",
@@ -83,11 +97,18 @@ function resolveCommandAlias(command) {
 }
 
 const CALLBACK_ACTIONS = {
+  role: "role",
+  student: "student",
+  teacher: "teacher",
+  pick_group: "pick_group",
+  pick_teacher: "pick_teacher",
   today: "today",
   tomorrow: "tomorrow",
   next: "next",
   mygroup: "mygroup",
+  myteacher: "myteacher",
   groups: "groups",
+  teachers: "teachers",
   help: "help",
   sync: "sync"
 };
@@ -126,6 +147,47 @@ function parseCallbackCommand(payload) {
   }
 
   return raw.toLowerCase();
+}
+
+function teacherMatchKey(value) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/\./g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return "";
+
+  const parts = normalized.split(" ").filter(Boolean);
+  if (!parts.length) return "";
+
+  const surname = parts[0];
+  const initialsRaw = parts.slice(1).join("");
+  if (!initialsRaw) return surname;
+
+  if (parts.length >= 3) {
+    const nameInitial = parts[1][0] || "";
+    const middleInitial = parts[2][0] || "";
+    return `${surname}:${nameInitial}${middleInitial}`;
+  }
+
+  const twoLetters = initialsRaw.slice(0, 2);
+  return `${surname}:${twoLetters}`;
+}
+
+function isSlashCommand(text) {
+  return String(text || "").trim().startsWith("/");
+}
+
+function encodeToken(value) {
+  return Buffer.from(String(value), "utf8").toString("base64url");
+}
+
+function decodeToken(value) {
+  try {
+    return Buffer.from(String(value), "base64url").toString("utf8");
+  } catch (error) {
+    return "";
+  }
 }
 
 function isIsoDate(value) {
@@ -210,7 +272,7 @@ class MaxBotService {
     if (!update || !update.update_type) return;
 
     if (update.update_type === "bot_started") {
-      await this.replyFromBotStarted(update, this.helpMessage());
+      await this.replyFromBotStarted(update);
       return;
     }
 
@@ -232,6 +294,11 @@ class MaxBotService {
     if (!target) {
       this.logger.warn("MAX update target cannot be resolved", { updateType: update.update_type });
       return;
+    }
+
+    if (!isSlashCommand(text)) {
+      const consumedByWizard = await this.handlePendingTextInput({ senderId, target, text });
+      if (consumedByWizard) return;
     }
 
     const { command, args } = normalizeCommand(text);
@@ -325,38 +392,63 @@ class MaxBotService {
    * Reply to MAX `bot_started` events.
    *
    * @param {Record<string, any>} update
-   * @param {string} text
    * @returns {Promise<void>}
    */
-  async replyFromBotStarted(update, text) {
+  async replyFromBotStarted(update) {
     const chatId = update?.chat_id;
     const userId = update?.user?.user_id;
+    const senderId = userId !== undefined && userId !== null ? String(userId) : "";
+    const payload = await this.buildWelcomePayload(senderId);
 
     if (chatId !== undefined && chatId !== null) {
-      await this.sendText({ chatId }, text, { attachments: this.mainMenuKeyboard() });
+      await this.sendText({ chatId }, payload.text, { attachments: payload.attachments });
       return;
     }
 
     if (userId !== undefined && userId !== null) {
-      await this.sendText({ userId }, text, { attachments: this.mainMenuKeyboard() });
+      await this.sendText({ userId }, payload.text, { attachments: payload.attachments });
     }
   }
 
   /**
-   * Build inline keyboard attachment with quick actions.
+   * Get stored user role.
+   *
+   * @param {string} senderId
+   * @returns {Promise<"student"|"teacher"|null>}
+   */
+  async getUserRole(senderId) {
+    if (!senderId) return null;
+    const pref = await this.userPrefsRepository.getByUserId(senderId);
+    return pref?.role === "teacher" || pref?.role === "student" ? pref.role : null;
+  }
+
+  /**
+   * Build first-time role selection text.
+   *
+   * @returns {string}
+   */
+  roleSelectionMessage() {
+    return [
+      "Выберите режим работы:",
+      "- Студент: расписание по группе",
+      "- Преподаватель: расписание по ФИО",
+      "",
+      "Нажмите кнопку ниже или используйте команду `/студент` / `/преподаватель`."
+    ].join("\n");
+  }
+
+  /**
+   * Build role selection keyboard.
    *
    * @returns {Array<Record<string, any>>}
    */
-  mainMenuKeyboard() {
+  roleSelectionKeyboard() {
     return [
       {
         type: "inline_keyboard",
         payload: {
           buttons: [
-            [callbackButton("Сегодня", "today"), callbackButton("Завтра", "tomorrow")],
-            [callbackButton("Следующая пара", "next"), callbackButton("Моя группа", "mygroup")],
-            [callbackButton("Группы", "groups"), callbackButton("Обновить", "sync")],
-            [callbackButton("Помощь", "help")]
+            [callbackButton("Я студент", "student"), callbackButton("Я преподаватель", "teacher")]
           ]
         }
       }
@@ -364,26 +456,111 @@ class MaxBotService {
   }
 
   /**
-   * Build the static help message shown to users.
+   * Build inline keyboard attachment with quick actions based on selected role.
    *
+   * @param {"student"|"teacher"} [role="student"]
+   * @returns {Array<Record<string, any>>}
+   */
+  mainMenuKeyboard(role = "student") {
+    const roleButtons =
+      role === "teacher"
+        ? [
+            [callbackButton("Сегодня", "today"), callbackButton("Завтра", "tomorrow")],
+            [callbackButton("Следующая пара", "next"), callbackButton("Выбрать преподавателя", "pick_teacher")],
+            [callbackButton("Мой преподаватель", "myteacher"), callbackButton("Преподаватели", "teachers")],
+            [callbackButton("Я студент", "student")],
+            [callbackButton("Помощь", "help"), callbackButton("Обновить", "sync")]
+          ]
+        : [
+            [callbackButton("Сегодня", "today"), callbackButton("Завтра", "tomorrow")],
+            [callbackButton("Следующая пара", "next"), callbackButton("Выбрать группу", "pick_group")],
+            [callbackButton("Моя группа", "mygroup"), callbackButton("Группы", "groups")],
+            [callbackButton("Я преподаватель", "teacher")],
+            [callbackButton("Помощь", "help"), callbackButton("Обновить", "sync")]
+          ];
+
+    return [
+      {
+        type: "inline_keyboard",
+        payload: {
+          buttons: roleButtons
+        }
+      }
+    ];
+  }
+
+  /**
+   * Build help message shown to users.
+   *
+   * @param {"student"|"teacher"|null} [role]
    * @returns {string}
    */
-  helpMessage() {
-    return [
+  helpMessage(role = null) {
+    const common = [
       "Привет! Я бот расписания OmAcademy.",
-      "Используйте команды или кнопки ниже.",
+      "Можно использовать команды или кнопки меню.",
       "",
-      "Команды:",
-      "- `/помощь` (`/help`) - показать это меню",
+      "Общие команды:",
+      "- `/помощь` (`/help`) - это меню",
+      "- `/роль` - выбор режима",
+      "- `/студент` - режим студента",
+      "- `/преподаватель` - режим преподавателя",
+      "- `/обновить` (`/sync`) - принудительный sync (только admin)"
+    ];
+
+    const studentCommands = [
+      "",
+      "Режим Студент:",
       "- `/группы [поиск]` (`/groups`) - список групп",
       "- `/группа <код|название>` (`/setgroup`) - сохранить группу по умолчанию",
-      "- `/моягруппа` (`/mygroup`) - текущая группа по умолчанию",
+      "- `/моягруппа` (`/mygroup`) - текущая группа",
       "- `/сегодня [код|название]` (`/today`) - расписание на сегодня",
       "- `/завтра [код|название]` (`/tomorrow`) - расписание на завтра",
       "- `/дата <YYYY-MM-DD> [код|название]` (`/date`) - расписание на дату",
-      "- `/следующая [код|название]` (`/next`) - ближайшая пара",
-      "- `/обновить` (`/sync`) - принудительный sync (только admin)"
+      "- `/следующая [код|название]` (`/next`) - ближайшая пара"
+    ];
+
+    const teacherCommands = [
+      "",
+      "Режим Преподаватель:",
+      "- `/преподаватели [поиск]` (`/teachers`) - список преподавателей",
+      "- `/препод <ФИО>` (`/setteacher`) - сохранить преподавателя по умолчанию",
+      "- `/мойпрепод` (`/myteacher`) - текущий преподаватель",
+      "- `/сегодня [ФИО]` (`/today`) - расписание на сегодня",
+      "- `/завтра [ФИО]` (`/tomorrow`) - расписание на завтра",
+      "- `/дата <YYYY-MM-DD> [ФИО]` (`/date`) - расписание на дату",
+      "- `/следующая [ФИО]` (`/next`) - ближайшая пара"
+    ];
+
+    if (role === "student") return [...common, ...studentCommands].join("\n");
+    if (role === "teacher") return [...common, ...teacherCommands].join("\n");
+
+    return [
+      this.roleSelectionMessage(),
+      "",
+      "После выбора роли используйте `/помощь`, чтобы увидеть команды для вашего режима."
     ].join("\n");
+  }
+
+  /**
+   * Build welcome payload for user depending on selected role.
+   *
+   * @param {string} senderId
+   * @returns {Promise<{text: string, attachments: Array<Record<string, any>>}>}
+   */
+  async buildWelcomePayload(senderId) {
+    const role = await this.getUserRole(senderId);
+    if (!role) {
+      return {
+        text: this.helpMessage(null),
+        attachments: this.roleSelectionKeyboard()
+      };
+    }
+
+    return {
+      text: this.helpMessage(role),
+      attachments: this.mainMenuKeyboard(role)
+    };
   }
 
   /**
@@ -404,6 +581,21 @@ class MaxBotService {
     }
 
     const command = parseCallbackCommand(update?.callback?.payload || update?.payload);
+
+    if (command.startsWith("pickg:")) {
+      const groupCode = command.slice("pickg:".length).trim();
+      await this.safeAnswerCallback(callbackId, "Выбрано");
+      await this.handlePickGroupFromCallback(target, senderId, groupCode);
+      return;
+    }
+
+    if (command.startsWith("pickt:")) {
+      const token = command.slice("pickt:".length).trim();
+      await this.safeAnswerCallback(callbackId, "Выбрано");
+      await this.handlePickTeacherFromCallback(target, senderId, token);
+      return;
+    }
+
     const resolvedCommand = CALLBACK_ACTIONS[command];
     if (!resolvedCommand) {
       await this.safeAnswerCallback(callbackId, "Неизвестная кнопка.");
@@ -430,6 +622,67 @@ class MaxBotService {
   }
 
   /**
+   * Handle callback selection for group.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string} groupCode
+   * @returns {Promise<void>}
+   */
+  async handlePickGroupFromCallback(target, senderId, groupCode) {
+    if (!groupCode) {
+      await this.sendText(target, "Не удалось определить группу. Попробуйте снова.");
+      return;
+    }
+
+    const resolved = await this.resolveGroup(senderId, groupCode);
+    if (resolved.error) {
+      await this.sendText(target, resolved.error);
+      return;
+    }
+
+    await this.userPrefsRepository.setPreferredGroup(senderId, resolved.group);
+    await this.userPrefsRepository.setRole(senderId, "student");
+    await this.sendText(
+      target,
+      `Группа выбрана: ${resolved.group.name} (код: ${resolved.group.code})`,
+      { attachments: this.mainMenuKeyboard("student") }
+    );
+  }
+
+  /**
+   * Handle callback selection for teacher.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string} token
+   * @returns {Promise<void>}
+   */
+  async handlePickTeacherFromCallback(target, senderId, token) {
+    const decoded = decodeToken(token);
+    if (!decoded) {
+      await this.sendText(target, "Не удалось определить преподавателя. Попробуйте снова.");
+      return;
+    }
+
+    const teachers = await this.getActiveTeachers();
+    const teacher = teachers.find(
+      (item) => (item.code && `code:${item.code}` === decoded) || `key:${item.key}` === decoded
+    );
+
+    if (!teacher) {
+      await this.sendText(target, "Преподаватель не найден. Повторите выбор.");
+      return;
+    }
+
+    await this.userPrefsRepository.setPreferredTeacher(senderId, teacher);
+    await this.userPrefsRepository.setRole(senderId, "teacher");
+    await this.sendText(target, `Преподаватель выбран: ${teacher.name}`, {
+      attachments: this.mainMenuKeyboard("teacher")
+    });
+  }
+
+  /**
    * Route a parsed command to the corresponding command handler.
    *
    * @param {{command: string, args: string[], senderId: string, target: {chatId?: string|number, userId?: string|number}}} params
@@ -440,8 +693,30 @@ class MaxBotService {
 
     switch (resolvedCommand) {
       case "start":
-      case "help":
-        await this.sendText(target, this.helpMessage(), { attachments: this.mainMenuKeyboard() });
+      case "help": {
+        const payload = await this.buildWelcomePayload(senderId);
+        await this.sendText(target, payload.text, { attachments: payload.attachments });
+        return;
+      }
+
+      case "role":
+        await this.sendText(target, this.roleSelectionMessage(), {
+          attachments: this.roleSelectionKeyboard()
+        });
+        return;
+
+      case "student":
+        await this.userPrefsRepository.setRole(senderId, "student");
+        await this.sendText(target, "Режим переключен: Студент.", {
+          attachments: this.mainMenuKeyboard("student")
+        });
+        return;
+
+      case "teacher":
+        await this.userPrefsRepository.setRole(senderId, "teacher");
+        await this.sendText(target, "Режим переключен: Преподаватель.", {
+          attachments: this.mainMenuKeyboard("teacher")
+        });
         return;
 
       case "groups":
@@ -456,26 +731,98 @@ class MaxBotService {
         await this.handleMyGroupCommand(target, senderId);
         return;
 
+      case "pick_group":
+        await this.startGroupPicker(target, senderId);
+        return;
+
+      case "teachers":
+        await this.handleTeachersCommand(target, args);
+        return;
+
+      case "setteacher":
+        await this.handleSetTeacherCommand(target, senderId, args);
+        return;
+
+      case "myteacher":
+        await this.handleMyTeacherCommand(target, senderId);
+        return;
+
+      case "pick_teacher":
+        await this.startTeacherPicker(target, senderId);
+        return;
+
       case "today": {
+        const role = await this.getUserRole(senderId);
+        if (!role) {
+          await this.sendText(target, this.roleSelectionMessage(), {
+            attachments: this.roleSelectionKeyboard()
+          });
+          return;
+        }
         const date = getIsoDateInTimezone(this.timezone);
-        await this.handleDayScheduleCommand(target, senderId, date, args);
+        if (role === "teacher") {
+          await this.handleTeacherDayScheduleCommand(target, senderId, date, args);
+          return;
+        }
+
+        await this.handleStudentDayScheduleCommand(target, senderId, date, args);
         return;
       }
 
       case "tomorrow": {
+        const role = await this.getUserRole(senderId);
+        if (!role) {
+          await this.sendText(target, this.roleSelectionMessage(), {
+            attachments: this.roleSelectionKeyboard()
+          });
+          return;
+        }
         const today = getIsoDateInTimezone(this.timezone);
         const tomorrow = shiftIsoDate(today, 1);
-        await this.handleDayScheduleCommand(target, senderId, tomorrow, args);
+        if (role === "teacher") {
+          await this.handleTeacherDayScheduleCommand(target, senderId, tomorrow, args);
+          return;
+        }
+
+        await this.handleStudentDayScheduleCommand(target, senderId, tomorrow, args);
         return;
       }
 
-      case "date":
-        await this.handleDateCommand(target, senderId, args);
-        return;
+      case "date": {
+        const role = await this.getUserRole(senderId);
+        if (!role) {
+          await this.sendText(target, this.roleSelectionMessage(), {
+            attachments: this.roleSelectionKeyboard()
+          });
+          return;
+        }
 
-      case "next":
-        await this.handleNextCommand(target, senderId, args);
+        if (role === "teacher") {
+          await this.handleTeacherDateCommand(target, senderId, args);
+          return;
+        }
+
+        await this.handleStudentDateCommand(target, senderId, args);
         return;
+      }
+
+      case "next": {
+        const role = await this.getUserRole(senderId);
+        if (!role) {
+          await this.sendText(target, this.roleSelectionMessage(), {
+            attachments: this.roleSelectionKeyboard()
+          });
+          return;
+        }
+
+        if (role === "teacher") {
+          await this.handleTeacherNextCommand(target, senderId, args);
+          return;
+        }
+
+        await this.handleStudentNextCommand(target, senderId, args);
+        return;
+      }
 
       case "sync":
         await this.handleSyncCommand(target, senderId);
@@ -487,12 +834,239 @@ class MaxBotService {
   }
 
   /**
+   * Handle text in the context of pending multi-step selection flow.
+   *
+   * @param {{senderId: string, target: {chatId?: string|number, userId?: string|number}, text: string}} params
+   * @returns {Promise<boolean>}
+   */
+  async handlePendingTextInput({ senderId, target, text }) {
+    const pref = await this.userPrefsRepository.getByUserId(senderId);
+    const pendingAction = pref?.pendingAction;
+    if (!pendingAction) return false;
+
+    const input = String(text || "").trim();
+    if (!input) return true;
+
+    const lower = input.toLowerCase();
+    if (lower === "отмена" || lower === "cancel") {
+      await this.userPrefsRepository.clearPendingAction(senderId);
+      await this.sendText(target, "Выбор отменен.");
+      return true;
+    }
+
+    if (pendingAction === "await_group_query") {
+      await this.handleGroupPickerInput(target, senderId, input);
+      return true;
+    }
+
+    if (pendingAction === "await_teacher_query") {
+      await this.handleTeacherPickerInput(target, senderId, input);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Start group picker flow.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @returns {Promise<void>}
+   */
+  async startGroupPicker(target, senderId) {
+    await this.userPrefsRepository.setRole(senderId, "student");
+    await this.userPrefsRepository.setPendingAction(senderId, "await_group_query");
+    await this.sendText(
+      target,
+      "Введите часть названия группы или код группы.\nПример: `исп-9.15` или `60`.\nДля отмены напишите: `отмена`."
+    );
+  }
+
+  /**
+   * Start teacher picker flow.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @returns {Promise<void>}
+   */
+  async startTeacherPicker(target, senderId) {
+    await this.userPrefsRepository.setRole(senderId, "teacher");
+    await this.userPrefsRepository.setPendingAction(senderId, "await_teacher_query");
+    await this.sendText(
+      target,
+      "Введите фамилию или часть ФИО преподавателя.\nПример: `тигова`.\nДля отмены напишите: `отмена`."
+    );
+  }
+
+  /**
+   * Process group picker query and return selection buttons.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string} input
+   * @returns {Promise<void>}
+   */
+  async handleGroupPickerInput(target, senderId, input) {
+    const groups = await this.getActiveGroups();
+    if (!groups.length) {
+      await this.sendText(target, "Нет активных групп. Сначала выполните `/обновить`.");
+      return;
+    }
+
+    const query = input.toLowerCase();
+    const filtered = groups.filter(
+      (group) => group.code.includes(query) || group.name.toLowerCase().includes(query)
+    );
+
+    if (!filtered.length) {
+      await this.sendText(target, "Ничего не найдено. Уточните запрос или введите `отмена`.");
+      return;
+    }
+
+    if (filtered.length === 1) {
+      await this.userPrefsRepository.setPreferredGroup(senderId, filtered[0]);
+      await this.userPrefsRepository.setRole(senderId, "student");
+      await this.sendText(
+        target,
+        `Группа выбрана: ${filtered[0].name} (код: ${filtered[0].code})`,
+        { attachments: this.mainMenuKeyboard("student") }
+      );
+      return;
+    }
+
+    const limit = 12;
+    const buttons = filtered.slice(0, limit).map((group) => [
+      {
+        type: "callback",
+        text: `${group.name} (${group.code})`,
+        payload: `cmd:pickg:${group.code}`
+      }
+    ]);
+
+    let textOut = `Найдено групп: ${filtered.length}. Выберите группу кнопкой ниже.`;
+    if (filtered.length > limit) {
+      textOut += `\nПоказаны первые ${limit}. Уточните запрос для более точного списка.`;
+    }
+
+    await this.sendText(target, textOut, {
+      attachments: [
+        {
+          type: "inline_keyboard",
+          payload: { buttons }
+        }
+      ]
+    });
+  }
+
+  /**
+   * Process teacher picker query and return selection buttons.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string} input
+   * @returns {Promise<void>}
+   */
+  async handleTeacherPickerInput(target, senderId, input) {
+    const teachers = await this.getActiveTeachers();
+    if (!teachers.length) {
+      await this.sendText(target, "Нет списка преподавателей. Сначала выполните `/обновить`.");
+      return;
+    }
+
+    const query = input.toLowerCase();
+    const queryKey = teacherMatchKey(input);
+    const filtered = teachers.filter(
+      (teacher) =>
+        teacher.name.toLowerCase().includes(query) || (queryKey && teacher.key.startsWith(queryKey))
+    );
+
+    if (!filtered.length) {
+      await this.sendText(target, "Ничего не найдено. Уточните запрос или введите `отмена`.");
+      return;
+    }
+
+    if (filtered.length === 1) {
+      await this.userPrefsRepository.setPreferredTeacher(senderId, filtered[0]);
+      await this.userPrefsRepository.setRole(senderId, "teacher");
+      await this.sendText(target, `Преподаватель выбран: ${filtered[0].name}`, {
+        attachments: this.mainMenuKeyboard("teacher")
+      });
+      return;
+    }
+
+    const limit = 12;
+    const buttons = filtered.slice(0, limit).map((teacher) => {
+      const token = encodeToken(teacher.code ? `code:${teacher.code}` : `key:${teacher.key}`);
+      return [
+        {
+          type: "callback",
+          text: teacher.name,
+          payload: `cmd:pickt:${token}`
+        }
+      ];
+    });
+
+    let textOut = `Найдено преподавателей: ${filtered.length}. Выберите преподавателя кнопкой ниже.`;
+    if (filtered.length > limit) {
+      textOut += `\nПоказаны первые ${limit}. Уточните запрос для более точного списка.`;
+    }
+
+    await this.sendText(target, textOut, {
+      attachments: [
+        {
+          type: "inline_keyboard",
+          payload: { buttons }
+        }
+      ]
+    });
+  }
+
+  /**
    * Read active groups from the current schedule snapshot.
    *
    * @returns {Promise<Array<Record<string, any>>>}
    */
   async getActiveGroups() {
     return this.scheduleRepository.getActiveGroups();
+  }
+
+  /**
+   * Read active teachers from current schedule snapshot and deduplicate by initials key.
+   *
+   * @returns {Promise<Array<Record<string, any>>>}
+   */
+  async getActiveTeachers() {
+    const teachers = await this.scheduleRepository.getActiveTeachers();
+    const byKey = new Map();
+
+    teachers.forEach((teacher) => {
+      const key = teacherMatchKey(teacher.name);
+      if (!key) return;
+
+      const prev = byKey.get(key);
+      if (!prev) {
+        byKey.set(key, {
+          key,
+          code: teacher.code || null,
+          name: teacher.name
+        });
+        return;
+      }
+
+      // Prefer full form over initials when both variants exist.
+      const prevScore = prev.name.length + (prev.code ? 5 : 0);
+      const nextScore = teacher.name.length + (teacher.code ? 5 : 0);
+      if (nextScore > prevScore) {
+        byKey.set(key, {
+          key,
+          code: teacher.code || null,
+          name: teacher.name
+        });
+      }
+    });
+
+    return Array.from(byKey.values()).sort((a, b) => a.name.localeCompare(b.name, "ru"));
   }
 
   /**
@@ -546,6 +1120,64 @@ class MaxBotService {
   }
 
   /**
+   * Resolve a teacher by explicit input or user preference.
+   *
+   * @param {string} senderId
+   * @param {string} rawTeacherInput
+   * @returns {Promise<{teacher?: Record<string, any>, error?: string}>}
+   */
+  async resolveTeacher(senderId, rawTeacherInput) {
+    const teachers = await this.getActiveTeachers();
+    if (!teachers.length) {
+      return { error: "Список преподавателей пока недоступен. Выполните `/обновить`." };
+    }
+
+    let input = (rawTeacherInput || "").trim();
+    if (!input) {
+      const pref = await this.userPrefsRepository.getByUserId(senderId);
+      if (!pref?.preferredTeacherName && !pref?.preferredTeacherKey) {
+        return {
+          error:
+            "Преподаватель не указан. Используйте `/препод <ФИО>` или передайте ФИО в команде."
+        };
+      }
+
+      if (pref.preferredTeacherKey) {
+        const byKey = teachers.find((teacher) => teacher.key === pref.preferredTeacherKey);
+        if (byKey) return { teacher: byKey };
+      }
+
+      input = pref.preferredTeacherName || "";
+    }
+
+    const byCode = teachers.find((teacher) => teacher.code && teacher.code === input);
+    if (byCode) return { teacher: byCode };
+
+    const lower = input.toLowerCase();
+    const byNameExact = teachers.find((teacher) => teacher.name.toLowerCase() === lower);
+    if (byNameExact) return { teacher: byNameExact };
+
+    const byKeyExact = teachers.find((teacher) => teacher.key === teacherMatchKey(input));
+    if (byKeyExact) return { teacher: byKeyExact };
+
+    const byNameContains = teachers.filter((teacher) => teacher.name.toLowerCase().includes(lower));
+    if (byNameContains.length === 1) {
+      return { teacher: byNameContains[0] };
+    }
+
+    if (byNameContains.length > 1) {
+      return {
+        error: `Слишком много совпадений. Подходят: ${byNameContains
+          .slice(0, 10)
+          .map((teacher) => teacher.name)
+          .join(", ")}`
+      };
+    }
+
+    return { error: `Преподаватель не найден: ${input}` };
+  }
+
+  /**
    * Handle `/groups` command.
    *
    * @param {{chatId?: string|number, userId?: string|number}} target
@@ -569,13 +1201,50 @@ class MaxBotService {
       return;
     }
 
-    const limit = query ? 80 : 40;
-    const lines = filtered.slice(0, limit).map((g) => `- ${g.code} - ${g.name}`);
+    const limit = query ? 60 : 35;
+    const lines = filtered.slice(0, limit).map((g, index) => `${index + 1}. ${g.name} (код: ${g.code})`);
 
     let result = `Найдено групп: ${filtered.length}\n\n${lines.join("\n")}`;
     if (filtered.length > limit) {
       result += `\n\nПоказаны первые ${limit}. Уточните запрос: /группы <текст>.`;
     }
+    result += "\n\nЧтобы выбрать группу: `/группа <код>`";
+
+    await this.sendText(target, result);
+  }
+
+  /**
+   * Handle `/teachers` command.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string[]} args
+   * @returns {Promise<void>}
+   */
+  async handleTeachersCommand(target, args) {
+    const teachers = await this.getActiveTeachers();
+    if (!teachers.length) {
+      await this.sendText(target, "Нет списка преподавателей. Сначала выполните `/обновить`.");
+      return;
+    }
+
+    const query = args.join(" ").trim().toLowerCase();
+    const filtered = query
+      ? teachers.filter((teacher) => teacher.name.toLowerCase().includes(query))
+      : teachers;
+
+    if (!filtered.length) {
+      await this.sendText(target, "По вашему запросу преподаватели не найдены.");
+      return;
+    }
+
+    const limit = query ? 60 : 35;
+    const lines = filtered.slice(0, limit).map((teacher, index) => `${index + 1}. ${teacher.name}`);
+
+    let result = `Найдено преподавателей: ${filtered.length}\n\n${lines.join("\n")}`;
+    if (filtered.length > limit) {
+      result += `\n\nПоказаны первые ${limit}. Уточните запрос: /преподаватели <текст>.`;
+    }
+    result += "\n\nЧтобы выбрать преподавателя: `/препод <ФИО>`";
 
     await this.sendText(target, result);
   }
@@ -602,6 +1271,7 @@ class MaxBotService {
     }
 
     await this.userPrefsRepository.setPreferredGroup(senderId, resolved.group);
+    await this.userPrefsRepository.setRole(senderId, "student");
     await this.sendText(
       target,
       `Группа по умолчанию сохранена: ${resolved.group.name} (код: ${resolved.group.code})`
@@ -626,6 +1296,49 @@ class MaxBotService {
       target,
       `Ваша группа по умолчанию: ${pref.preferredGroupName} (код: ${pref.preferredGroupCode})`
     );
+  }
+
+  /**
+   * Handle `/setteacher` command.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string[]} args
+   * @returns {Promise<void>}
+   */
+  async handleSetTeacherCommand(target, senderId, args) {
+    const input = args.join(" ").trim();
+    if (!input) {
+      await this.sendText(target, "Использование: `/препод <ФИО>`");
+      return;
+    }
+
+    const resolved = await this.resolveTeacher(senderId, input);
+    if (resolved.error) {
+      await this.sendText(target, resolved.error);
+      return;
+    }
+
+    await this.userPrefsRepository.setPreferredTeacher(senderId, resolved.teacher);
+    await this.userPrefsRepository.setRole(senderId, "teacher");
+    await this.sendText(target, `Преподаватель по умолчанию сохранен: ${resolved.teacher.name}`);
+  }
+
+  /**
+   * Handle `/myteacher` command.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @returns {Promise<void>}
+   */
+  async handleMyTeacherCommand(target, senderId) {
+    const pref = await this.userPrefsRepository.getByUserId(senderId);
+    if (!pref?.preferredTeacherName) {
+      await this.sendText(target, "Преподаватель по умолчанию не задан. Используйте `/препод <ФИО>`.");
+      return;
+    }
+
+    await this.sendText(target, `Ваш преподаватель по умолчанию: ${pref.preferredTeacherName}`);
   }
 
   /**
@@ -661,7 +1374,7 @@ class MaxBotService {
    * @param {string[]} args
    * @returns {Promise<void>}
    */
-  async handleDayScheduleCommand(target, senderId, isoDate, args) {
+  async handleStudentDayScheduleCommand(target, senderId, isoDate, args) {
     const input = args.join(" ").trim();
     const resolved = await this.resolveGroup(senderId, input);
 
@@ -687,7 +1400,7 @@ class MaxBotService {
    * @param {string[]} args
    * @returns {Promise<void>}
    */
-  async handleDateCommand(target, senderId, args) {
+  async handleStudentDateCommand(target, senderId, args) {
     if (!args.length) {
       await this.sendText(target, "Использование: `/дата <YYYY-MM-DD> [код|название]`");
       return;
@@ -700,7 +1413,7 @@ class MaxBotService {
     }
 
     const groupInput = args.slice(1).join(" ");
-    await this.handleDayScheduleCommand(target, senderId, dateArg, groupInput ? [groupInput] : []);
+    await this.handleStudentDayScheduleCommand(target, senderId, dateArg, groupInput ? [groupInput] : []);
   }
 
   /**
@@ -711,7 +1424,7 @@ class MaxBotService {
    * @param {string[]} args
    * @returns {Promise<void>}
    */
-  async handleNextCommand(target, senderId, args) {
+  async handleStudentNextCommand(target, senderId, args) {
     const input = args.join(" ").trim();
     const resolved = await this.resolveGroup(senderId, input);
 
@@ -744,6 +1457,131 @@ class MaxBotService {
       nextLesson.subject,
       `Аудитория: ${nextLesson.room || "-"}`,
       `Преподаватель: ${nextLesson.teacher || "-"}`
+    ].join("\n");
+
+    await this.sendText(target, message);
+  }
+
+  /**
+   * Filter active lessons by teacher identity and optional date.
+   *
+   * @param {{name: string, key: string}} teacher
+   * @param {{date?: string}} [filters]
+   * @returns {Promise<Array<Record<string, any>>>}
+   */
+  async getTeacherLessons(teacher, filters = {}) {
+    const lessons = await this.scheduleRepository.getActiveLessons(filters.date ? { date: filters.date } : {});
+    return lessons
+      .filter((lesson) => teacherMatchKey(lesson.teacher) === teacher.key)
+      .sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        if (a.lessonNumber !== b.lessonNumber) return a.lessonNumber - b.lessonNumber;
+        return (a.groupName || "").localeCompare(b.groupName || "", "ru");
+      });
+  }
+
+  /**
+   * Format teacher day schedule for a readable bot response.
+   *
+   * @param {{name: string}} teacher
+   * @param {string} isoDate
+   * @param {Array<Record<string, any>>} lessons
+   * @returns {string}
+   */
+  formatTeacherLessonsForDay(teacher, isoDate, lessons) {
+    const header = `${teacher.name}\nДата: ${toRuDate(isoDate)}`;
+    if (!lessons.length) {
+      return `${header}\n\nПар не найдено.`;
+    }
+
+    const lines = lessons.map((lesson) => {
+      const room = lesson.room || "-";
+      const group = lesson.groupName || lesson.groupCode || "-";
+      return `${lesson.lessonNumber}. ${lesson.subject}\n   Группа: ${group}\n   Аудитория: ${room}`;
+    });
+
+    return `${header}\n\n${lines.join("\n")}`;
+  }
+
+  /**
+   * Handle teacher day-based commands.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string} isoDate
+   * @param {string[]} args
+   * @returns {Promise<void>}
+   */
+  async handleTeacherDayScheduleCommand(target, senderId, isoDate, args) {
+    const input = args.join(" ").trim();
+    const resolved = await this.resolveTeacher(senderId, input);
+
+    if (resolved.error) {
+      await this.sendText(target, resolved.error);
+      return;
+    }
+
+    const lessons = await this.getTeacherLessons(resolved.teacher, { date: isoDate });
+    const text = this.formatTeacherLessonsForDay(resolved.teacher, isoDate, lessons);
+    await this.sendText(target, text);
+  }
+
+  /**
+   * Handle `/date` command in teacher mode.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string[]} args
+   * @returns {Promise<void>}
+   */
+  async handleTeacherDateCommand(target, senderId, args) {
+    if (!args.length) {
+      await this.sendText(target, "Использование: `/дата <YYYY-MM-DD> [ФИО]`");
+      return;
+    }
+
+    const dateArg = args[0];
+    if (!isIsoDate(dateArg)) {
+      await this.sendText(target, "Неверный формат даты. Ожидается `YYYY-MM-DD`.");
+      return;
+    }
+
+    const teacherInput = args.slice(1).join(" ");
+    await this.handleTeacherDayScheduleCommand(target, senderId, dateArg, teacherInput ? [teacherInput] : []);
+  }
+
+  /**
+   * Handle `/next` command in teacher mode.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string[]} args
+   * @returns {Promise<void>}
+   */
+  async handleTeacherNextCommand(target, senderId, args) {
+    const input = args.join(" ").trim();
+    const resolved = await this.resolveTeacher(senderId, input);
+
+    if (resolved.error) {
+      await this.sendText(target, resolved.error);
+      return;
+    }
+
+    const today = getIsoDateInTimezone(this.timezone);
+    const lessons = await this.getTeacherLessons(resolved.teacher);
+    const nextLesson = lessons.filter((lesson) => lesson.date >= today)[0];
+
+    if (!nextLesson) {
+      await this.sendText(target, `Для преподавателя ${resolved.teacher.name} ближайшие пары не найдены.`);
+      return;
+    }
+
+    const message = [
+      `Ближайшая пара преподавателя ${resolved.teacher.name}:`,
+      `${toRuDate(nextLesson.date)}, пара ${nextLesson.lessonNumber}`,
+      nextLesson.subject,
+      `Группа: ${nextLesson.groupName || nextLesson.groupCode || "-"}`,
+      `Аудитория: ${nextLesson.room || "-"}`
     ].join("\n");
 
     await this.sendText(target, message);

@@ -75,6 +75,15 @@ async function bootstrap() {
     res.json({ count: groups.length, groups });
   });
 
+  app.get("/api/teachers", async (req, res) => {
+    const teachers = await repository.getActiveTeachers();
+    const query = String(req.query.query || "").trim().toLowerCase();
+    const filtered = query
+      ? teachers.filter((teacher) => String(teacher.name || "").toLowerCase().includes(query))
+      : teachers;
+    res.json({ count: filtered.length, teachers: filtered });
+  });
+
   app.get("/api/schedule", async (req, res) => {
     const filters = {
       group: req.query.group,

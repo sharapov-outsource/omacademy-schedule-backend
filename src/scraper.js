@@ -52,6 +52,14 @@ function mapLimit(items, limit, iterator) {
  */
 
 /**
+ * @typedef {Object} ScraperTeacher
+ * @property {string} code
+ * @property {string} name
+ * @property {string} href
+ * @property {string} url
+ */
+
+/**
  * @typedef {Object} ScraperLesson
  * @property {string} groupCode
  * @property {string} groupName
@@ -154,6 +162,40 @@ class OmAcademyScraper {
       sourceUrl: url,
       sourceUpdatedAt: this.extractSourceUpdatedAt($),
       groups
+    };
+  }
+
+  /**
+   * Parse all teachers from `cp.htm`.
+   *
+   * @returns {Promise<{sourceUrl: string, sourceUpdatedAt: string|null, teachers: ScraperTeacher[]}>}
+   */
+  async fetchTeachers() {
+    const { html, url } = await this.fetchHtml("cp.htm");
+    const $ = cheerio.load(html);
+
+    const teachers = [];
+    // Teacher links on cp.htm are stored as anchors like cp192.htm.
+    $("a.z0[href^='cp'][href$='.htm']").each((_, el) => {
+      const href = $(el).attr("href");
+      const name = cleanText($(el).text());
+      if (!href || !name) return;
+
+      const match = href.match(/^cp(\d+)\.htm$/i);
+      if (!match) return;
+
+      teachers.push({
+        code: match[1],
+        name,
+        href,
+        url: this.buildUrl(href)
+      });
+    });
+
+    return {
+      sourceUrl: url,
+      sourceUpdatedAt: this.extractSourceUpdatedAt($),
+      teachers
     };
   }
 
