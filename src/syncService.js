@@ -1,11 +1,27 @@
+function getIsoDateInTimezone(timezone) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
+}
+
+function shiftIsoDate(isoDate, deltaDays) {
+  const base = new Date(`${isoDate}T00:00:00Z`);
+  base.setUTCDate(base.getUTCDate() + deltaDays);
+  return base.toISOString().slice(0, 10);
+}
+
 class SyncService {
   /**
-   * @param {{scraper: any, repository: any, logger: any}} deps
+   * @param {{scraper: any, repository: any, logger: any, timezone?: string}} deps
    */
-  constructor({ scraper, repository, logger }) {
+  constructor({ scraper, repository, logger, timezone }) {
     this.scraper = scraper;
     this.repository = repository;
     this.logger = logger;
+    this.timezone = timezone || "Asia/Omsk";
     this.running = false;
     this.lastError = null;
     this.lastResult = null;
@@ -31,6 +47,23 @@ class SyncService {
       lastError: this.lastError,
       lastResult: this.lastResult
     };
+  }
+
+  /**
+   * Delete lessons older than yesterday in configured timezone.
+   *
+   * @returns {Promise<{keepFromDate: string, deletedCount: number}>}
+   */
+  async cleanupOldLessons() {
+    const today = getIsoDateInTimezone(this.timezone);
+    const keepFromDate = shiftIsoDate(today, -1);
+    const deletedCount = await this.repository.deleteActiveLessonsOlderThan(keepFromDate);
+
+    if (deletedCount > 0) {
+      this.logger.info("Old lessons cleanup finished", { keepFromDate, deletedCount });
+    }
+
+    return { keepFromDate, deletedCount };
   }
 
   /**
@@ -74,6 +107,7 @@ class SyncService {
         lessons,
         sourceUpdatedAt
       });
+      const cleanup = await this.cleanupOldLessons();
 
       const finishedAt = new Date();
       const result = {
@@ -85,7 +119,8 @@ class SyncService {
         groupsCount: normalizedGroups.length,
         teachersCount: teachers.length,
         lessonsCount: lessons.length,
-        sourceUpdatedAt
+        sourceUpdatedAt,
+        cleanup
       };
 
       await this.repository.finishSyncRun(syncId, {

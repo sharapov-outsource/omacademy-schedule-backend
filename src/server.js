@@ -25,7 +25,12 @@ async function bootstrap() {
     maxConcurrentRequests: config.maxConcurrentRequests
   });
 
-  const syncService = new SyncService({ scraper, repository, logger });
+  const syncService = new SyncService({
+    scraper,
+    repository,
+    logger,
+    timezone: config.syncTimezone
+  });
   let maxBotService = null;
   let reminderService = null;
 
@@ -167,6 +172,10 @@ async function bootstrap() {
   if (config.runSyncOnStartup) {
     syncService.run("startup").catch((error) => {
       logger.error("Startup sync failed", { error: error.message });
+    });
+  } else {
+    syncService.cleanupOldLessons().catch((error) => {
+      logger.error("Startup old lessons cleanup failed", { error: error.message });
     });
   }
 

@@ -18,7 +18,12 @@ const { SyncService } = require("./syncService");
     maxConcurrentRequests: config.maxConcurrentRequests
   });
 
-  const syncService = new SyncService({ scraper, repository, logger });
+  const syncService = new SyncService({
+    scraper,
+    repository,
+    logger,
+    timezone: config.syncTimezone
+  });
   const result = await syncService.run("cli");
   console.log(JSON.stringify(result, null, 2));
 

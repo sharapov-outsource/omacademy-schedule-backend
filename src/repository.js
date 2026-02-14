@@ -257,6 +257,25 @@ class ScheduleRepository {
   }
 
   /**
+   * Delete old lessons from active snapshot.
+   * Keeps lessons with `date >= keepFromDate`.
+   *
+   * @param {string} keepFromDate
+   * @returns {Promise<number>} deleted documents count
+   */
+  async deleteActiveLessonsOlderThan(keepFromDate) {
+    const meta = await this.getActiveSyncMeta();
+    if (!meta?.activeSyncId) return 0;
+
+    const result = await this.lessons.deleteMany({
+      syncId: meta.activeSyncId,
+      date: { $lt: keepFromDate }
+    });
+
+    return result?.deletedCount || 0;
+  }
+
+  /**
    * Persist reminder delivery marker and skip duplicates.
    *
    * @param {{reminderKey: string, userId: string, role: string, daysBefore: number, date: string, lessonNumber: number, targetRef: string}} payload
