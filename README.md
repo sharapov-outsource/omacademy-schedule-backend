@@ -165,6 +165,7 @@ Webhook management for MAX:
 npm run max:webhook:register
 npm run max:webhook:list
 npm run max:webhook:delete
+npm run max:stats
 ```
 
 ## MAX Bot
@@ -284,6 +285,12 @@ Delete current webhook (for configured public URL + path):
 
 ```bash
 npm run max:webhook:delete
+```
+
+Show bot usage/install statistics (CLI only):
+
+```bash
+npm run max:stats
 ```
 
 ### Bot smoke test

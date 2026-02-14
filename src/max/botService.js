@@ -1,5 +1,6 @@
 const { MaxApiClient } = require("./apiClient");
 const { MaxUserPrefsRepository } = require("./userPrefsRepository");
+const { MaxBotStatsRepository } = require("./statsRepository");
 
 function getIsoDateInTimezone(timezone) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -355,6 +356,7 @@ class MaxBotService {
 
     this.api = new MaxApiClient({ token, apiBaseUrl, timeoutMs });
     this.userPrefsRepository = new MaxUserPrefsRepository(db);
+    this.statsRepository = new MaxBotStatsRepository(db);
   }
 
   /**
@@ -364,6 +366,40 @@ class MaxBotService {
    */
   async init() {
     await this.userPrefsRepository.ensureIndexes();
+    await this.statsRepository.ensureIndexes();
+  }
+
+  /**
+   * Persist "user seen" metric without failing request flow.
+   *
+   * @param {string} senderId
+   * @param {string} updateType
+   * @returns {Promise<void>}
+   */
+  async trackUserSeenMetric(senderId, updateType) {
+    if (!senderId) return;
+    try {
+      await this.statsRepository.recordUserSeen({ userId: senderId, updateType });
+    } catch (error) {
+      this.logger.warn("Failed to persist MAX user activity metric", { error: error.message });
+    }
+  }
+
+  /**
+   * Persist bot_started metric without failing request flow.
+   *
+   * @param {Record<string, any>} update
+   * @returns {Promise<void>}
+   */
+  async trackBotStartedMetric(update) {
+    try {
+      await this.statsRepository.recordBotStarted({
+        userId: update?.user?.user_id,
+        chatId: update?.chat_id
+      });
+    } catch (error) {
+      this.logger.warn("Failed to persist MAX install metric", { error: error.message });
+    }
   }
 
   /**
@@ -376,11 +412,16 @@ class MaxBotService {
     if (!update || !update.update_type) return;
 
     if (update.update_type === "bot_started") {
+      const senderId = this.resolveSenderId(update);
+      await this.trackUserSeenMetric(senderId, update.update_type);
+      await this.trackBotStartedMetric(update);
       await this.replyFromBotStarted(update);
       return;
     }
 
     if (update.update_type === "message_callback") {
+      const senderId = this.resolveSenderId(update);
+      await this.trackUserSeenMetric(senderId, update.update_type);
       await this.handleMessageCallbackUpdate(update);
       return;
     }
@@ -390,6 +431,7 @@ class MaxBotService {
     const senderId = this.resolveSenderId(update);
     if (!senderId) return;
     if (update?.message?.sender?.is_bot === true) return;
+    await this.trackUserSeenMetric(senderId, update.update_type);
 
     const text = extractMessageText(update);
     if (!text) return;
@@ -1154,12 +1196,43 @@ class MaxBotService {
    */
   async startGroupPicker(target, senderId) {
     await this.userPrefsRepository.setRole(senderId, "student");
-    await this.setPendingState(senderId, target, "await_group_query");
-    await this.sendText(
-      target,
-      "Введите часть названия группы или код группы.\nПример: `исп-9.15` или `60`.\nДля отмены напишите: `отмена`.",
-      { noMenu: true, senderId }
-    );
+    await this.clearPendingState(senderId, target);
+
+    const groups = await this.getActiveGroups();
+    if (!groups.length) {
+      await this.sendText(target, "Нет активных групп. Сначала выполните `/обновить`.");
+      return;
+    }
+
+    const senderToken = encodeToken(senderId);
+    const buttons = [];
+    for (let index = 0; index < groups.length; index += 2) {
+      const row = [];
+      const first = groups[index];
+      const second = groups[index + 1];
+
+      row.push({
+        type: "callback",
+        text: first.name,
+        payload: `cmd:pickg:${first.code}:${senderToken}`
+      });
+
+      if (second) {
+        row.push({
+          type: "callback",
+          text: second.name,
+          payload: `cmd:pickg:${second.code}:${senderToken}`
+        });
+      }
+
+      buttons.push(row);
+    }
+
+    await this.sendText(target, "Выберите группу:", {
+      attachments: [{ type: "inline_keyboard", payload: { buttons } }],
+      noMenu: true,
+      senderId
+    });
   }
 
   /**
