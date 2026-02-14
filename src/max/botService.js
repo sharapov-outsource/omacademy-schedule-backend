@@ -782,6 +782,13 @@ class MaxBotService {
       return;
     }
 
+    if (command.startsWith("gpage:")) {
+      const payload = commandRaw.slice("gpage:".length).trim();
+      await this.safeAnswerCallback(callbackId, "Открываю");
+      await this.handleGroupPageFromCallback(target, callbackSenderId, payload);
+      return;
+    }
+
     if (command.startsWith("pickt:")) {
       const payload = commandRaw.slice("pickt:".length).trim();
       await this.safeAnswerCallback(callbackId, "Выбрано");
@@ -870,6 +877,22 @@ class MaxBotService {
       `Группа выбрана: ${resolved.group.name} (код: ${resolved.group.code})`,
       { attachments: this.mainMenuKeyboard("student", effectiveSenderId), senderId: effectiveSenderId }
     );
+  }
+
+  /**
+   * Handle callback pagination for group picker.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string} payload
+   * @returns {Promise<void>}
+   */
+  async handleGroupPageFromCallback(target, senderId, payload) {
+    const [pageRaw, senderToken] = String(payload || "").split(":");
+    const senderFromToken = decodeToken(senderToken);
+    const effectiveSenderId = senderFromToken || senderId;
+    const page = Number.parseInt(String(pageRaw || "0"), 10);
+    await this.startGroupPicker(target, effectiveSenderId, Number.isFinite(page) ? page : 0);
   }
 
   /**
@@ -1194,7 +1217,7 @@ class MaxBotService {
    * @param {string} senderId
    * @returns {Promise<void>}
    */
-  async startGroupPicker(target, senderId) {
+  async startGroupPicker(target, senderId, page = 0) {
     await this.userPrefsRepository.setRole(senderId, "student");
     await this.clearPendingState(senderId, target);
 
@@ -1204,12 +1227,18 @@ class MaxBotService {
       return;
     }
 
+    const pageSize = 12;
+    const totalPages = Math.max(1, Math.ceil(groups.length / pageSize));
+    const safePage = Math.min(Math.max(page, 0), totalPages - 1);
+    const from = safePage * pageSize;
+    const currentPageGroups = groups.slice(from, from + pageSize);
+
     const senderToken = encodeToken(senderId);
     const buttons = [];
-    for (let index = 0; index < groups.length; index += 2) {
+    for (let index = 0; index < currentPageGroups.length; index += 2) {
       const row = [];
-      const first = groups[index];
-      const second = groups[index + 1];
+      const first = currentPageGroups[index];
+      const second = currentPageGroups[index + 1];
 
       row.push({
         type: "callback",
@@ -1228,7 +1257,26 @@ class MaxBotService {
       buttons.push(row);
     }
 
-    await this.sendText(target, "Выберите группу:", {
+    if (totalPages > 1) {
+      const navRow = [];
+      if (safePage > 0) {
+        navRow.push({
+          type: "callback",
+          text: "← Назад",
+          payload: `cmd:gpage:${safePage - 1}:${senderToken}`
+        });
+      }
+      if (safePage < totalPages - 1) {
+        navRow.push({
+          type: "callback",
+          text: "Вперед →",
+          payload: `cmd:gpage:${safePage + 1}:${senderToken}`
+        });
+      }
+      if (navRow.length) buttons.push(navRow);
+    }
+
+    await this.sendText(target, `Выберите группу (страница ${safePage + 1}/${totalPages}):`, {
       attachments: [{ type: "inline_keyboard", payload: { buttons } }],
       noMenu: true,
       senderId
