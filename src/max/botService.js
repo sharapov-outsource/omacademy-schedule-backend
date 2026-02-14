@@ -248,12 +248,12 @@ function splitLongMessage(text, maxLen = 3800) {
 
 function parseLessonStartTimes(value) {
   const defaults = {
-    1: "08:30",
-    2: "10:15",
-    3: "12:10",
-    4: "13:55",
-    5: "15:40",
-    6: "17:25"
+    1: "08:00",
+    2: "10:00",
+    3: "12:00",
+    4: "14:00",
+    5: "16:00",
+    6: "17:50"
   };
 
   if (!value) return defaults;
@@ -293,6 +293,13 @@ function minutesToHhmm(totalMinutes) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
+function prettyTime(hhmm) {
+  const match = String(hhmm || "").match(/^(\d{2}):(\d{2})$/);
+  if (!match) return hhmm;
+  const hour = Number.parseInt(match[1], 10);
+  return `${hour}:${match[2]}`;
+}
+
 class MaxBotService {
   /**
    * @param {{
@@ -305,6 +312,9 @@ class MaxBotService {
    *  timeoutMs?: number,
    *  timezone: string,
    *  lessonStartTimes?: string,
+   *  lessonPartMinutes?: number,
+   *  midLessonBreakMinutes?: number,
+   *  betweenLessonsBreakMinutes?: number,
    *  adminUserIds?: Array<string|number>
    * }} deps
    */
@@ -318,6 +328,9 @@ class MaxBotService {
     timeoutMs,
     timezone,
     lessonStartTimes,
+    lessonPartMinutes,
+    midLessonBreakMinutes,
+    betweenLessonsBreakMinutes,
     adminUserIds
   }) {
     this.logger = logger;
@@ -325,6 +338,16 @@ class MaxBotService {
     this.syncService = syncService;
     this.timezone = timezone;
     this.lessonStartTimes = parseLessonStartTimes(lessonStartTimes);
+    this.lessonPartMinutes =
+      Number.isFinite(lessonPartMinutes) && lessonPartMinutes > 0 ? lessonPartMinutes : 45;
+    this.midLessonBreakMinutes =
+      Number.isFinite(midLessonBreakMinutes) && midLessonBreakMinutes >= 0
+        ? midLessonBreakMinutes
+        : 10;
+    this.betweenLessonsBreakMinutes =
+      Number.isFinite(betweenLessonsBreakMinutes) && betweenLessonsBreakMinutes >= 0
+        ? betweenLessonsBreakMinutes
+        : 20;
     this.adminUserIds = new Set((adminUserIds || []).map((id) => String(id)));
     this.lastSenderByTarget = new Map();
     this.pendingByTarget = new Map();
@@ -1509,7 +1532,8 @@ class MaxBotService {
 
   /**
    * Get lesson time range by lesson number.
-   * Rule: 45 + 10 + 45 minutes inside a lesson, 20 minutes between lessons.
+   * Rule: `LESSON_PART_MINUTES + MID_LESSON_BREAK_MINUTES + LESSON_PART_MINUTES`
+   * inside a lesson, plus `BETWEEN_LESSONS_BREAK_MINUTES` between lessons.
    *
    * @param {number} lessonNumber
    * @returns {string}
@@ -1518,14 +1542,15 @@ class MaxBotService {
     const lessonNo = Number.parseInt(lessonNumber, 10);
     if (!Number.isFinite(lessonNo) || lessonNo < 1) return "--:--";
 
-    const baseStart = hhmmToMinutes(this.lessonStartTimes[1]) ?? hhmmToMinutes("08:30");
+    const baseStart = hhmmToMinutes(this.lessonStartTimes[1]) ?? hhmmToMinutes("08:00");
     if (baseStart === null) return "--:--";
 
-    const stepMinutes = 120; // 100 min lesson + 20 min break between lessons.
-    const lessonDurationMinutes = 100; // 45 + 10 + 45
+    const lessonDurationMinutes =
+      this.lessonPartMinutes + this.midLessonBreakMinutes + this.lessonPartMinutes;
+    const stepMinutes = lessonDurationMinutes + this.betweenLessonsBreakMinutes;
     const start = baseStart + (lessonNo - 1) * stepMinutes;
     const end = start + lessonDurationMinutes;
-    return `${minutesToHhmm(start)}-${minutesToHhmm(end)}`;
+    return `${minutesToHhmm(start)} - ${minutesToHhmm(end)}`;
   }
 
   /**
@@ -1660,7 +1685,7 @@ class MaxBotService {
    * @returns {string}
    */
   formatLessonsForDay(group, isoDate, lessons) {
-    const header = `Группа: ${group.name} (${group.code})\nДата: ${toRuDate(isoDate)}`;
+    const header = `${group.name} (${group.code})\n${toRuDate(isoDate)}`;
 
     if (!lessons.length) {
       return `${header}\n\nПар не найдено.`;
@@ -1673,23 +1698,21 @@ class MaxBotService {
         return (a.columnIndex || 0) - (b.columnIndex || 0);
       });
 
-    const colNumWidth = 2;
-    const colTimeWidth = 11;
-    const tableLines = [
-      `${"№".padEnd(colNumWidth)} | ${"Время".padEnd(colTimeWidth)} | Предмет`,
-      `${"-".repeat(colNumWidth)}-+-${"-".repeat(colTimeWidth)}-+-${"-".repeat(32)}`
-    ];
-
-    sorted.forEach((lesson) => {
+    const blocks = sorted.map((lesson) => {
       const room = lesson.room || "-";
       const teacher = lesson.teacher || "-";
-      const lessonNo = String(lesson.lessonNumber).padEnd(colNumWidth);
-      const lessonTime = this.getLessonTimeRange(lesson.lessonNumber).padEnd(colTimeWidth);
-      tableLines.push(`${lessonNo} | ${lessonTime} | ${lesson.subject} (${room})`);
-      tableLines.push(`${"".padEnd(colNumWidth)} | ${"".padEnd(colTimeWidth)} | Преподаватель: ${teacher}`);
+      const lessonTime = this.getLessonTimeRange(lesson.lessonNumber);
+      const [startRaw, endRaw] = lessonTime.split(" - ");
+      const start = prettyTime(startRaw);
+      const end = prettyTime(endRaw);
+      return [
+        `${lesson.lessonNumber}. ${start} - ${end}`,
+        `${lesson.subject} (${room})`,
+        teacher
+      ].join("\n");
     });
 
-    return `${header}\n\n\`\`\`\n${tableLines.join("\n")}\n\`\`\``;
+    return `${header}\n\n${blocks.join("\n\n")}`;
   }
 
   /**
@@ -1810,7 +1833,7 @@ class MaxBotService {
    * @returns {string}
    */
   formatTeacherLessonsForDay(teacher, isoDate, lessons) {
-    const header = `Преподаватель: ${teacher.name}\nДата: ${toRuDate(isoDate)}`;
+    const header = `${teacher.name}\n${toRuDate(isoDate)}`;
     if (!lessons.length) {
       return `${header}\n\nПар не найдено.`;
     }
@@ -1822,23 +1845,21 @@ class MaxBotService {
         return (a.groupName || "").localeCompare(b.groupName || "", "ru");
       });
 
-    const colNumWidth = 2;
-    const colTimeWidth = 11;
-    const tableLines = [
-      `${"№".padEnd(colNumWidth)} | ${"Время".padEnd(colTimeWidth)} | Предмет`,
-      `${"-".repeat(colNumWidth)}-+-${"-".repeat(colTimeWidth)}-+-${"-".repeat(32)}`
-    ];
-
-    sorted.forEach((lesson) => {
+    const blocks = sorted.map((lesson) => {
       const room = lesson.room || "-";
       const group = lesson.groupName || lesson.groupCode || "-";
-      const lessonNo = String(lesson.lessonNumber).padEnd(colNumWidth);
-      const lessonTime = this.getLessonTimeRange(lesson.lessonNumber).padEnd(colTimeWidth);
-      tableLines.push(`${lessonNo} | ${lessonTime} | ${lesson.subject} (${room})`);
-      tableLines.push(`${"".padEnd(colNumWidth)} | ${"".padEnd(colTimeWidth)} | Группа: ${group}`);
+      const lessonTime = this.getLessonTimeRange(lesson.lessonNumber);
+      const [startRaw, endRaw] = lessonTime.split(" - ");
+      const start = prettyTime(startRaw);
+      const end = prettyTime(endRaw);
+      return [
+        `${lesson.lessonNumber}. ${start} - ${end}`,
+        `${lesson.subject} (${room})`,
+        group
+      ].join("\n");
     });
 
-    return `${header}\n\n\`\`\`\n${tableLines.join("\n")}\n\`\`\``;
+    return `${header}\n\n${blocks.join("\n\n")}`;
   }
 
   /**

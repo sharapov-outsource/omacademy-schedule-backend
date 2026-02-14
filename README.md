@@ -101,7 +101,10 @@ HTTP_TIMEOUT_MS=20000
 MAX_CONCURRENT_REQUESTS=5
 REMINDER_ENABLED=true
 REMINDER_CRON=* * * * *
-REMINDER_LESSON_START_TIMES=1=08:30,2=10:15,3=12:10,4=13:55,5=15:40,6=17:25
+REMINDER_LESSON_START_TIMES=1=08:00,2=10:00,3=12:00,4=14:00,5=16:00,6=17:50
+LESSON_PART_MINUTES=45
+MID_LESSON_BREAK_MINUTES=10
+BETWEEN_LESSONS_BREAK_MINUTES=20
 ```
 
 ### 3. Build and start containers
@@ -218,7 +221,10 @@ MAX_WEBHOOK_PUBLIC_URL=https://your-domain.example
 MAX_ADMIN_USER_IDS=12345,67890
 REMINDER_ENABLED=true
 REMINDER_CRON=* * * * *
-REMINDER_LESSON_START_TIMES=1=08:30,2=10:15,3=12:10,4=13:55,5=15:40,6=17:25
+REMINDER_LESSON_START_TIMES=1=08:00,2=10:00,3=12:00,4=14:00,5=16:00,6=17:50
+LESSON_PART_MINUTES=45
+MID_LESSON_BREAK_MINUTES=10
+BETWEEN_LESSONS_BREAK_MINUTES=20
 ```
 
 Notes:
@@ -228,6 +234,7 @@ Notes:
 - `REMINDER_ENABLED` enables reminder scheduler (default: `true`).
 - `REMINDER_CRON` controls how often reminder checks run (default: every minute).
 - `REMINDER_LESSON_START_TIMES` maps lesson number to start time in `HH:MM` format.
+- `LESSON_PART_MINUTES`, `MID_LESSON_BREAK_MINUTES`, `BETWEEN_LESSONS_BREAK_MINUTES` control lesson time range formatting in bot schedule output.
 
 ### Reminder subscriptions
 
@@ -368,6 +375,12 @@ Returns current sync state, last error (if any), and latest run metadata.
 | `MAX_WEBHOOK_SECRET_HEADER` | `x-max-bot-api-secret` | Header name used to read webhook secret |
 | `MAX_WEBHOOK_PUBLIC_URL` | `` | Public base URL used by webhook registration scripts |
 | `MAX_ADMIN_USER_IDS` | `` | Comma-separated MAX user IDs allowed to run `/sync` |
+| `REMINDER_ENABLED` | `true` | Enable reminder scheduler |
+| `REMINDER_CRON` | `* * * * *` | Reminder check frequency |
+| `REMINDER_LESSON_START_TIMES` | `1=08:00,2=10:00,3=12:00,4=14:00,5=16:00,6=17:50` | Lesson start time map |
+| `LESSON_PART_MINUTES` | `45` | Duration of each half of a lesson |
+| `MID_LESSON_BREAK_MINUTES` | `10` | Break between two halves of one lesson |
+| `BETWEEN_LESSONS_BREAK_MINUTES` | `20` | Break between lessons |
 
 ## Data Model (MongoDB)
 

@@ -45,5 +45,8 @@ module.exports = {
   reminderEnabled: toBool(process.env.REMINDER_ENABLED, true),
   reminderCron: process.env.REMINDER_CRON || "* * * * *",
   reminderLessonStartTimes:
-    process.env.REMINDER_LESSON_START_TIMES || "1=08:30,2=10:15,3=12:10,4=13:55,5=15:40,6=17:25"
+    process.env.REMINDER_LESSON_START_TIMES || "1=08:00,2=10:00,3=12:00,4=14:00,5=16:00,6=17:50",
+  lessonPartMinutes: toInt(process.env.LESSON_PART_MINUTES, 45),
+  midLessonBreakMinutes: toInt(process.env.MID_LESSON_BREAK_MINUTES, 10),
+  betweenLessonsBreakMinutes: toInt(process.env.BETWEEN_LESSONS_BREAK_MINUTES, 20)
 };

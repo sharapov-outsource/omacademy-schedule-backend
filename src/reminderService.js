@@ -63,12 +63,12 @@ function getTimezoneNow(timezone) {
 
 function parseLessonStartTimes(value) {
   const defaults = {
-    1: "08:30",
-    2: "10:15",
-    3: "12:10",
-    4: "13:55",
-    5: "15:40",
-    6: "17:25"
+    1: "08:00",
+    2: "10:00",
+    3: "12:00",
+    4: "14:00",
+    5: "16:00",
+    6: "17:50"
   };
 
   if (!value) return defaults;

@@ -47,6 +47,9 @@ async function bootstrap() {
       timeoutMs: config.httpTimeoutMs,
       timezone: config.syncTimezone,
       lessonStartTimes: config.reminderLessonStartTimes,
+      lessonPartMinutes: config.lessonPartMinutes,
+      midLessonBreakMinutes: config.midLessonBreakMinutes,
+      betweenLessonsBreakMinutes: config.betweenLessonsBreakMinutes,
       adminUserIds: config.maxAdminUserIds
     });
 
