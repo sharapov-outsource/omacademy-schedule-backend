@@ -275,6 +275,24 @@ function parseLessonStartTimes(value) {
   return Object.keys(map).length > 0 ? map : defaults;
 }
 
+function hhmmToMinutes(hhmm) {
+  const match = String(hhmm || "").match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+function minutesToHhmm(totalMinutes) {
+  const minutesInDay = 24 * 60;
+  const normalized = ((totalMinutes % minutesInDay) + minutesInDay) % minutesInDay;
+  const hours = Math.floor(normalized / 60);
+  const minutes = normalized % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
 class MaxBotService {
   /**
    * @param {{
@@ -1490,6 +1508,27 @@ class MaxBotService {
   }
 
   /**
+   * Get lesson time range by lesson number.
+   * Rule: 45 + 10 + 45 minutes inside a lesson, 20 minutes between lessons.
+   *
+   * @param {number} lessonNumber
+   * @returns {string}
+   */
+  getLessonTimeRange(lessonNumber) {
+    const lessonNo = Number.parseInt(lessonNumber, 10);
+    if (!Number.isFinite(lessonNo) || lessonNo < 1) return "--:--";
+
+    const baseStart = hhmmToMinutes(this.lessonStartTimes[1]) ?? hhmmToMinutes("08:30");
+    if (baseStart === null) return "--:--";
+
+    const stepMinutes = 120; // 100 min lesson + 20 min break between lessons.
+    const lessonDurationMinutes = 100; // 45 + 10 + 45
+    const start = baseStart + (lessonNo - 1) * stepMinutes;
+    const end = start + lessonDurationMinutes;
+    return `${minutesToHhmm(start)}-${minutesToHhmm(end)}`;
+  }
+
+  /**
    * Pick nearest lesson not earlier than current date/time.
    *
    * @param {Array<Record<string, any>>} lessons
@@ -1621,19 +1660,36 @@ class MaxBotService {
    * @returns {string}
    */
   formatLessonsForDay(group, isoDate, lessons) {
-    const header = `${group.name} (${group.code})\nДата: ${toRuDate(isoDate)}`;
+    const header = `Группа: ${group.name} (${group.code})\nДата: ${toRuDate(isoDate)}`;
 
     if (!lessons.length) {
       return `${header}\n\nПар не найдено.`;
     }
 
-    const lines = lessons.map((lesson) => {
-      const teacher = lesson.teacher || "-";
+    const sorted = lessons
+      .slice()
+      .sort((a, b) => {
+        if (a.lessonNumber !== b.lessonNumber) return a.lessonNumber - b.lessonNumber;
+        return (a.columnIndex || 0) - (b.columnIndex || 0);
+      });
+
+    const colNumWidth = 2;
+    const colTimeWidth = 11;
+    const tableLines = [
+      `${"№".padEnd(colNumWidth)} | ${"Время".padEnd(colTimeWidth)} | Предмет`,
+      `${"-".repeat(colNumWidth)}-+-${"-".repeat(colTimeWidth)}-+-${"-".repeat(32)}`
+    ];
+
+    sorted.forEach((lesson) => {
       const room = lesson.room || "-";
-      return `${lesson.lessonNumber}. ${lesson.subject}\n   Аудитория: ${room}\n   Преподаватель: ${teacher}`;
+      const teacher = lesson.teacher || "-";
+      const lessonNo = String(lesson.lessonNumber).padEnd(colNumWidth);
+      const lessonTime = this.getLessonTimeRange(lesson.lessonNumber).padEnd(colTimeWidth);
+      tableLines.push(`${lessonNo} | ${lessonTime} | ${lesson.subject} (${room})`);
+      tableLines.push(`${"".padEnd(colNumWidth)} | ${"".padEnd(colTimeWidth)} | Преподаватель: ${teacher}`);
     });
 
-    return `${header}\n\n${lines.join("\n")}`;
+    return `${header}\n\n\`\`\`\n${tableLines.join("\n")}\n\`\`\``;
   }
 
   /**
@@ -1754,18 +1810,35 @@ class MaxBotService {
    * @returns {string}
    */
   formatTeacherLessonsForDay(teacher, isoDate, lessons) {
-    const header = `${teacher.name}\nДата: ${toRuDate(isoDate)}`;
+    const header = `Преподаватель: ${teacher.name}\nДата: ${toRuDate(isoDate)}`;
     if (!lessons.length) {
       return `${header}\n\nПар не найдено.`;
     }
 
-    const lines = lessons.map((lesson) => {
+    const sorted = lessons
+      .slice()
+      .sort((a, b) => {
+        if (a.lessonNumber !== b.lessonNumber) return a.lessonNumber - b.lessonNumber;
+        return (a.groupName || "").localeCompare(b.groupName || "", "ru");
+      });
+
+    const colNumWidth = 2;
+    const colTimeWidth = 11;
+    const tableLines = [
+      `${"№".padEnd(colNumWidth)} | ${"Время".padEnd(colTimeWidth)} | Предмет`,
+      `${"-".repeat(colNumWidth)}-+-${"-".repeat(colTimeWidth)}-+-${"-".repeat(32)}`
+    ];
+
+    sorted.forEach((lesson) => {
       const room = lesson.room || "-";
       const group = lesson.groupName || lesson.groupCode || "-";
-      return `${lesson.lessonNumber}. ${lesson.subject}\n   Группа: ${group}\n   Аудитория: ${room}`;
+      const lessonNo = String(lesson.lessonNumber).padEnd(colNumWidth);
+      const lessonTime = this.getLessonTimeRange(lesson.lessonNumber).padEnd(colTimeWidth);
+      tableLines.push(`${lessonNo} | ${lessonTime} | ${lesson.subject} (${room})`);
+      tableLines.push(`${"".padEnd(colNumWidth)} | ${"".padEnd(colTimeWidth)} | Группа: ${group}`);
     });
 
-    return `${header}\n\n${lines.join("\n")}`;
+    return `${header}\n\n\`\`\`\n${tableLines.join("\n")}\n\`\`\``;
   }
 
   /**
