@@ -1815,12 +1815,63 @@ class MaxBotService {
    */
   async getTeacherLessons(teacher, filters = {}) {
     const lessons = await this.scheduleRepository.getActiveLessons(filters.date ? { date: filters.date } : {});
-    return lessons
+    const filtered = lessons
       .filter((lesson) => teacherMatchKey(lesson.teacher) === teacher.key)
       .sort((a, b) => {
         if (a.date !== b.date) return a.date.localeCompare(b.date);
         if (a.lessonNumber !== b.lessonNumber) return a.lessonNumber - b.lessonNumber;
         return (a.groupName || "").localeCompare(b.groupName || "", "ru");
+      });
+
+    return this.mergeTeacherParallelLessons(filtered);
+  }
+
+  /**
+   * Merge parallel teacher lessons into one row when time and room are the same.
+   *
+   * @param {Array<Record<string, any>>} lessons
+   * @returns {Array<Record<string, any>>}
+   */
+  mergeTeacherParallelLessons(lessons) {
+    const buckets = new Map();
+
+    lessons.forEach((lesson) => {
+      const date = String(lesson.date || "");
+      const lessonNumber = Number.parseInt(lesson.lessonNumber, 10);
+      const room = String(lesson.room || "-");
+      const key = `${date}|${lessonNumber}|${room}`;
+      const groupLabel = String(lesson.groupName || lesson.groupCode || "-");
+      const subjectLabel = String(lesson.subject || "");
+
+      if (!buckets.has(key)) {
+        buckets.set(key, {
+          lesson: { ...lesson },
+          groups: new Set(groupLabel ? [groupLabel] : []),
+          subjects: new Set(subjectLabel ? [subjectLabel] : [])
+        });
+        return;
+      }
+
+      const item = buckets.get(key);
+      if (groupLabel) item.groups.add(groupLabel);
+      if (subjectLabel) item.subjects.add(subjectLabel);
+    });
+
+    return Array.from(buckets.values())
+      .map(({ lesson, groups, subjects }) => {
+        const groupsList = Array.from(groups).filter(Boolean);
+        const subjectsList = Array.from(subjects).filter(Boolean);
+
+        return {
+          ...lesson,
+          groupName: groupsList.length ? groupsList.join(" ") : lesson.groupName || lesson.groupCode || "-",
+          subject: subjectsList.length > 1 ? subjectsList.join(" / ") : lesson.subject
+        };
+      })
+      .sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        if (a.lessonNumber !== b.lessonNumber) return a.lessonNumber - b.lessonNumber;
+        return String(a.groupName || "").localeCompare(String(b.groupName || ""), "ru");
       });
   }
 
