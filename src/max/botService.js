@@ -126,6 +126,7 @@ const CALLBACK_ACTIONS = {
   role: "role",
   student: "student",
   teacher: "teacher",
+  pick_date: "pick_date",
   pick_group: "pick_group",
   pick_teacher: "pick_teacher",
   today: "today",
@@ -614,48 +615,14 @@ class MaxBotService {
    * @returns {Array<Record<string, any>>}
    */
   mainMenuKeyboard(role = "student", senderId = "") {
-    const roleButtons =
-      role === "teacher"
-        ? [
-            [
-              callbackButton("Сегодня", "today", senderId),
-              callbackButton("Завтра", "tomorrow", senderId)
-            ],
-            [
-              callbackButton("Следующая пара", "next", senderId),
-              callbackButton("Выбрать преподавателя", "pick_teacher", senderId)
-            ],
-            [
-              callbackButton("Мой преподаватель", "myteacher", senderId),
-              callbackButton("Преподаватели", "teachers", senderId)
-            ],
-            [callbackButton("Напоминания", "reminder", senderId)],
-            [callbackButton("Я студент", "student", senderId)],
-            [
-              callbackButton("Помощь", "help", senderId),
-              callbackButton("Обновить", "sync", senderId)
-            ]
-          ]
-        : [
-            [
-              callbackButton("Сегодня", "today", senderId),
-              callbackButton("Завтра", "tomorrow", senderId)
-            ],
-            [
-              callbackButton("Следующая пара", "next", senderId),
-              callbackButton("Выбрать группу", "pick_group", senderId)
-            ],
-            [
-              callbackButton("Моя группа", "mygroup", senderId),
-              callbackButton("Группы", "groups", senderId)
-            ],
-            [callbackButton("Напоминания", "reminder", senderId)],
-            [callbackButton("Я преподаватель", "teacher", senderId)],
-            [
-              callbackButton("Помощь", "help", senderId),
-              callbackButton("Обновить", "sync", senderId)
-            ]
-          ];
+    const roleButtons = [
+      [callbackButton("Выбор даты", "pick_date", senderId), callbackButton("Сегодня", "today", senderId)],
+      [
+        callbackButton("Выбор группы", "pick_group", senderId),
+        callbackButton("Выбор преподавателя", "pick_teacher", senderId)
+      ],
+      [callbackButton("Помощь", "help", senderId), callbackButton("Напоминания", "reminder", senderId)]
+    ];
 
     return [
       {
@@ -780,6 +747,13 @@ class MaxBotService {
       return;
     }
 
+    if (String(commandRaw || "").toLowerCase().startsWith("datepick:")) {
+      const payload = commandRaw.slice("datepick:".length).trim();
+      await this.safeAnswerCallback(callbackId, "Выбрано");
+      await this.handleDatePickFromCallback(target, callbackSenderId, payload);
+      return;
+    }
+
     if (String(commandRaw || "").toLowerCase().startsWith("remset:")) {
       const [, modeRaw, senderToken] = String(commandRaw || "").split(":");
       const mode = String(modeRaw || "").trim().toLowerCase();
@@ -895,6 +869,42 @@ class MaxBotService {
   }
 
   /**
+   * Handle callback selection for date picker.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @param {string} payload
+   * @returns {Promise<void>}
+   */
+  async handleDatePickFromCallback(target, senderId, payload) {
+    const [isoDateRaw, senderToken] = String(payload || "").split(":");
+    const isoDate = String(isoDateRaw || "").trim();
+    const senderFromToken = decodeToken(senderToken);
+    const effectiveSenderId = senderFromToken || senderId;
+
+    if (!isIsoDate(isoDate)) {
+      await this.sendText(target, "Некорректная дата. Попробуйте открыть выбор даты заново.");
+      return;
+    }
+
+    const role = await this.getUserRole(effectiveSenderId);
+    if (!role) {
+      await this.sendText(target, this.roleSelectionMessage(), {
+        attachments: this.roleSelectionKeyboard(effectiveSenderId),
+        senderId: effectiveSenderId
+      });
+      return;
+    }
+
+    if (role === "teacher") {
+      await this.handleTeacherDayScheduleCommand(target, effectiveSenderId, isoDate, []);
+      return;
+    }
+
+    await this.handleStudentDayScheduleCommand(target, effectiveSenderId, isoDate, []);
+  }
+
+  /**
    * Route a parsed command to the corresponding command handler.
    *
    * @param {{command: string, args: string[], senderId: string, target: {chatId?: string|number, userId?: string|number}}} params
@@ -948,6 +958,10 @@ class MaxBotService {
 
       case "pick_group":
         await this.startGroupPicker(target, senderId);
+        return;
+
+      case "pick_date":
+        await this.startDatePicker(target, senderId);
         return;
 
       case "teachers":
@@ -1163,6 +1177,88 @@ class MaxBotService {
       "Введите фамилию или часть ФИО преподавателя.\nПример: `тигова`.\nДля отмены напишите: `отмена`.",
       { noMenu: true, senderId }
     );
+  }
+
+  /**
+   * Start date picker flow based on current role and selected group/teacher.
+   *
+   * @param {{chatId?: string|number, userId?: string|number}} target
+   * @param {string} senderId
+   * @returns {Promise<void>}
+   */
+  async startDatePicker(target, senderId) {
+    const role = await this.getUserRole(senderId);
+    if (!role) {
+      await this.sendText(target, this.roleSelectionMessage(), {
+        attachments: this.roleSelectionKeyboard(senderId),
+        senderId
+      });
+      return;
+    }
+
+    let dates = [];
+    if (role === "teacher") {
+      const teacherResolved = await this.resolveTeacher(senderId, "");
+      if (teacherResolved.error) {
+        await this.sendText(
+          target,
+          "Сначала выберите преподавателя (`/препод <ФИО>` или кнопка `Выбор преподавателя`)."
+        );
+        return;
+      }
+
+      const lessons = await this.getTeacherLessons(teacherResolved.teacher);
+      dates = Array.from(new Set(lessons.map((lesson) => String(lesson.date || "")).filter(isIsoDate))).sort(
+        (a, b) => a.localeCompare(b)
+      );
+    } else {
+      const groupResolved = await this.resolveGroup(senderId, "");
+      if (groupResolved.error) {
+        await this.sendText(target, "Сначала выберите группу (`/группа <код>` или кнопка `Выбор группы`).");
+        return;
+      }
+
+      const lessons = await this.scheduleRepository.getActiveLessons({ groupCode: groupResolved.group.code });
+      dates = Array.from(new Set(lessons.map((lesson) => String(lesson.date || "")).filter(isIsoDate))).sort(
+        (a, b) => a.localeCompare(b)
+      );
+    }
+
+    if (!dates.length) {
+      await this.sendText(target, "Для выбранного режима нет доступных дат с занятиями.");
+      return;
+    }
+
+    const list = dates;
+    const senderToken = encodeToken(senderId);
+    const buttons = [];
+
+    for (let index = 0; index < list.length; index += 2) {
+      const row = [];
+      const first = list[index];
+      const second = list[index + 1];
+      row.push({
+        type: "callback",
+        text: toRuDate(first),
+        payload: `cmd:datepick:${first}:${senderToken}`
+      });
+      if (second) {
+        row.push({
+          type: "callback",
+          text: toRuDate(second),
+          payload: `cmd:datepick:${second}:${senderToken}`
+        });
+      }
+      buttons.push(row);
+    }
+
+    const text = "Выберите дату:";
+
+    await this.sendText(target, text, {
+      attachments: [{ type: "inline_keyboard", payload: { buttons } }],
+      noMenu: true,
+      senderId
+    });
   }
 
   /**
@@ -2143,14 +2239,14 @@ class MaxBotService {
     }
 
     if (role === "student" && !pref?.preferredGroupCode) {
-      await this.sendText(target, "Сначала выберите группу (`/группа <код>` или кнопка `Выбрать группу`).");
+      await this.sendText(target, "Сначала выберите группу (`/группа <код>` или кнопка `Выбор группы`).");
       return;
     }
 
     if (role === "teacher" && !pref?.preferredTeacherName && !pref?.preferredTeacherKey) {
       await this.sendText(
         target,
-        "Сначала выберите преподавателя (`/препод <ФИО>` или кнопка `Выбрать преподавателя`)."
+        "Сначала выберите преподавателя (`/препод <ФИО>` или кнопка `Выбор преподавателя`)."
       );
       return;
     }
