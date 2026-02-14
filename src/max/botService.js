@@ -1227,7 +1227,7 @@ class MaxBotService {
       return;
     }
 
-    const pageSize = 12;
+    const pageSize = 24;
     const totalPages = Math.max(1, Math.ceil(groups.length / pageSize));
     const safePage = Math.min(Math.max(page, 0), totalPages - 1);
     const from = safePage * pageSize;
