@@ -1174,7 +1174,7 @@ class MaxBotService {
     await this.setPendingState(senderId, target, "await_teacher_query");
     await this.sendText(
       target,
-      "Введите фамилию или часть ФИО преподавателя.\nПример: `тигова`.\nДля отмены напишите: `отмена`.",
+      "Введите фамилию или часть ФИО преподавателя.\nПример: `Иванов`.\nДля отмены напишите: `отмена`.",
       { noMenu: true, senderId }
     );
   }
