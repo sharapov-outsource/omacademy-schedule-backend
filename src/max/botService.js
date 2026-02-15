@@ -311,12 +311,6 @@ function formatRoomMarkdown(room) {
   return value === "-" ? value : `**${value}**`;
 }
 
-function pairMarker(lessonNumber) {
-  const num = Number.parseInt(lessonNumber, 10);
-  if (!Number.isFinite(num)) return "⬜";
-  return num % 2 === 0 ? "🟦" : "⬜";
-}
-
 class MaxBotService {
   /**
    * @param {{
@@ -1999,7 +1993,7 @@ class MaxBotService {
       const start = prettyTime(startRaw);
       const end = prettyTime(endRaw);
       return [
-        `${pairMarker(lesson.lessonNumber)} ${lesson.lessonNumber}. ${start} - ${end}`,
+        `${lesson.lessonNumber}. ${start} - ${end}`,
         `${lesson.subject} (${formatRoomMarkdown(room)})`,
         teacher
       ].join("\n");
@@ -2233,7 +2227,7 @@ class MaxBotService {
         const [startRaw, endRaw] = lessonTime.split(" - ");
         const start = prettyTime(startRaw);
         const end = prettyTime(endRaw);
-        blocks.push(`${pairMarker(lessonNumber)} ${lessonNumber}. ${start} - ${end}\nПары нет`);
+        blocks.push(`${lessonNumber}. ${start} - ${end}\nПары нет`);
         continue;
       }
 
@@ -2247,7 +2241,7 @@ class MaxBotService {
         const location = cleanText(
           [group, room !== "-" ? formatRoomMarkdown(room) : ""].filter(Boolean).join(" ")
         ) || room;
-        blocks.push([`${pairMarker(lesson.lessonNumber)} ${lesson.lessonNumber}. ${start} - ${end}`, location, lesson.subject].join("\n"));
+        blocks.push([`${lesson.lessonNumber}. ${start} - ${end}`, location, lesson.subject].join("\n"));
       });
     }
 
