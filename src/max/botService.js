@@ -2,6 +2,10 @@ const { MaxApiClient } = require("./apiClient");
 const { MaxUserPrefsRepository } = require("./userPrefsRepository");
 const { MaxBotStatsRepository } = require("./statsRepository");
 
+function cleanText(value) {
+  return (value || "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function getIsoDateInTimezone(timezone) {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
