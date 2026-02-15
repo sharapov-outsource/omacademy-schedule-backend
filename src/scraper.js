@@ -247,6 +247,37 @@ class OmAcademyScraper {
   }
 
   /**
+   * Extract teacher-page lesson payload from a single cell.
+   * Typical order on cp pages: group (z1), room (z2), subject (z3).
+   * Some rows may contain plain text only (e.g., "Совещание").
+   *
+   * @param {import("cheerio").CheerioAPI} $
+   * @param {import("cheerio").Cheerio<any>} td
+   * @returns {{groupName: string|null, room: string|null, subject: string|null}}
+   */
+  extractTeacherCellPayload($, td) {
+    const groupPrimary = cleanText(td.find("a.z1").first().text());
+    const room = cleanText(td.find("a.z2").first().text());
+    const subjectByAnchor = cleanText(td.find("a.z3").first().text());
+    const groupSecondary = cleanText(td.find("a.z4").first().text());
+
+    const groupName = cleanText([groupPrimary, groupSecondary].filter(Boolean).join(" ")) || null;
+    let subject = subjectByAnchor || null;
+
+    if (!subject) {
+      const cloned = td.clone();
+      cloned.find("a.z1, a.z2, a.z4").remove();
+      subject = cleanText(cloned.text()) || null;
+    }
+
+    return {
+      groupName,
+      room: room || null,
+      subject
+    };
+  }
+
+  /**
    * Parse all lesson rows for a single group page (`cgXXX.htm`).
    *
    * @param {{code: string, name: string, href: string}} group
@@ -368,22 +399,20 @@ class OmAcademyScraper {
         const td = $(lessonCell);
         if (td.hasClass("nul")) return;
 
-        const subject = this.extractSubjectFromCell($, td);
-        const room = cleanText(td.find("a.z2").first().text());
-        const groupName = cleanText(td.find("a.z3").first().text()) || cleanText(td.find("a.z4").first().text());
+        const payload = this.extractTeacherCellPayload($, td);
         const columnIndex = idx + 1;
 
-        if (!subject || !currentDate) return;
+        if (!payload.subject || !currentDate) return;
 
         lessons.push({
-          groupCode: makeSyntheticGroupCode(groupName || null, teacher.code, columnIndex),
-          groupName: groupName || null,
+          groupCode: makeSyntheticGroupCode(payload.groupName || null, teacher.code, columnIndex),
+          groupName: payload.groupName || null,
           date: currentDate,
           dayLabel: currentDayLabel,
           lessonNumber,
           columnIndex,
-          subject,
-          room: room || null,
+          subject: payload.subject,
+          room: payload.room || null,
           teacher: pageTeacherName || teacher.name || null,
           sourceUrl: url
         });

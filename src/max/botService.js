@@ -2040,7 +2040,9 @@ class MaxBotService {
         return (a.groupName || "").localeCompare(b.groupName || "", "ru");
       });
 
-    return this.mergeTeacherParallelLessons(filtered);
+    const teacherPageOnly = filtered.filter((lesson) => String(lesson.groupCode || "").startsWith("tp:"));
+    const source = teacherPageOnly.length > 0 ? teacherPageOnly : filtered;
+    return this.mergeTeacherParallelLessons(source);
   }
 
   /**
@@ -2143,12 +2145,13 @@ class MaxBotService {
 
       rows.forEach((lesson) => {
         const room = lesson.room || "-";
-        const group = lesson.groupName || "-";
+        const group = lesson.groupName || "";
         const lessonTime = this.getLessonTimeRange(lesson.lessonNumber);
         const [startRaw, endRaw] = lessonTime.split(" - ");
         const start = prettyTime(startRaw);
         const end = prettyTime(endRaw);
-        blocks.push([`${lesson.lessonNumber}. ${start} - ${end}`, `${lesson.subject} (${room})`, group].join("\n"));
+        const location = cleanText([group, room !== "-" ? room : ""].filter(Boolean).join(" ")) || room;
+        blocks.push([`${lesson.lessonNumber}. ${start} - ${end}`, location, lesson.subject].join("\n"));
       });
     }
 
