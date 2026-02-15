@@ -28,6 +28,13 @@ function makeSyntheticGroupCode(groupName, teacherCode, columnIndex) {
   return `tp:${teacherCode || "unknown"}:${columnIndex}`;
 }
 
+function isGroupLike(value) {
+  const normalized = cleanText(value);
+  if (!normalized) return false;
+  // Examples: Ю-9.1, ИСП-1.39, П-2
+  return /[A-Za-zА-Яа-яЁё]{1,}-\d+(?:\.\d+)?/.test(normalized);
+}
+
 function mapLimit(items, limit, iterator) {
   if (!Array.isArray(items) || items.length === 0) return Promise.resolve([]);
 
@@ -256,23 +263,30 @@ class OmAcademyScraper {
    * @returns {{groupName: string|null, room: string|null, subject: string|null}}
    */
   extractTeacherCellPayload($, td) {
-    const groupPrimary = cleanText(td.find("a.z1").first().text());
-    const room = cleanText(td.find("a.z2").first().text());
-    const subjectByAnchor = cleanText(td.find("a.z3").first().text());
-    const groupSecondary = cleanText(td.find("a.z4").first().text());
+    const z1 = cleanText(td.find("a.z1").first().text());
+    const z2 = cleanText(td.find("a.z2").first().text());
+    const z3 = cleanText(td.find("a.z3").first().text());
+    const z4 = cleanText(td.find("a.z4").first().text());
 
-    const groupName = cleanText([groupPrimary, groupSecondary].filter(Boolean).join(" ")) || null;
-    let subject = subjectByAnchor || null;
+    // Most common shape: z1=group, z2=room, z3=subject.
+    const groupCandidates = [z1, z4].filter((value) => isGroupLike(value));
+    const groupName = cleanText(groupCandidates.join(" ")) || null;
+    const room = z2 || null;
 
+    let subject = z3 || null;
+    if (!subject) {
+      const nonGroupCandidates = [z1, z4].filter((value) => value && !isGroupLike(value));
+      subject = cleanText(nonGroupCandidates.join(" ")) || null;
+    }
     if (!subject) {
       const cloned = td.clone();
-      cloned.find("a.z1, a.z2, a.z4").remove();
+      cloned.find("a.z1, a.z2, a.z3, a.z4").remove();
       subject = cleanText(cloned.text()) || null;
     }
 
     return {
       groupName,
-      room: room || null,
+      room,
       subject
     };
   }
@@ -407,6 +421,7 @@ class OmAcademyScraper {
         lessons.push({
           groupCode: makeSyntheticGroupCode(payload.groupName || null, teacher.code, columnIndex),
           groupName: payload.groupName || null,
+          teacherCode: teacher.code || null,
           date: currentDate,
           dayLabel: currentDayLabel,
           lessonNumber,

@@ -1561,6 +1561,14 @@ class MaxBotService {
           code: teacher.code || null,
           name: teacher.name
         });
+        return;
+      }
+
+      if (!prev.code && teacher.code) {
+        byKey.set(key, {
+          ...prev,
+          code: teacher.code
+        });
       }
     });
 
@@ -2032,17 +2040,35 @@ class MaxBotService {
    */
   async getTeacherLessons(teacher, filters = {}) {
     const lessons = await this.scheduleRepository.getActiveLessons(filters.date ? { date: filters.date } : {});
-    const filtered = lessons
-      .filter((lesson) => teacherMatchKey(lesson.teacher) === teacher.key)
-      .sort((a, b) => {
-        if (a.date !== b.date) return a.date.localeCompare(b.date);
-        if (a.lessonNumber !== b.lessonNumber) return a.lessonNumber - b.lessonNumber;
-        return (a.groupName || "").localeCompare(b.groupName || "", "ru");
-      });
+    const byName = lessons.filter((lesson) => teacherMatchKey(lesson.teacher) === teacher.key);
 
-    const teacherPageOnly = filtered.filter((lesson) => String(lesson.groupCode || "").startsWith("tp:"));
-    const source = teacherPageOnly.length > 0 ? teacherPageOnly : filtered;
-    return this.mergeTeacherParallelLessons(source);
+    const teacherCode = String(teacher.code || "").trim();
+    const byTeacherPage = teacherCode
+      ? lessons.filter((lesson) => {
+          const sourceUrl = String(lesson.sourceUrl || "");
+          const codeFromUrl = sourceUrl.match(/cp(\d+)\.htm/i)?.[1] || "";
+          const codeFromField = String(lesson.teacherCode || "");
+          return codeFromUrl === teacherCode || codeFromField === teacherCode;
+        })
+      : [];
+
+    const surname = String(teacher.name || "")
+      .toLowerCase()
+      .trim()
+      .split(/\s+/)[0];
+    const bySurname =
+      !byTeacherPage.length && !byName.length && surname
+        ? lessons.filter((lesson) => String(lesson.teacher || "").toLowerCase().startsWith(surname))
+        : [];
+
+    const preferred = byTeacherPage.length > 0 ? byTeacherPage : byName.length > 0 ? byName : bySurname;
+    const sorted = preferred.sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      if (a.lessonNumber !== b.lessonNumber) return a.lessonNumber - b.lessonNumber;
+      return (a.groupName || "").localeCompare(b.groupName || "", "ru");
+    });
+
+    return this.mergeTeacherParallelLessons(sorted);
   }
 
   /**
