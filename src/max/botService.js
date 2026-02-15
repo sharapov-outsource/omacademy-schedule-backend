@@ -306,6 +306,17 @@ function prettyTime(hhmm) {
   return `${hour}:${match[2]}`;
 }
 
+function formatRoomMarkdown(room) {
+  const value = cleanText(room || "-") || "-";
+  return value === "-" ? value : `**${value}**`;
+}
+
+function pairMarker(lessonNumber) {
+  const num = Number.parseInt(lessonNumber, 10);
+  if (!Number.isFinite(num)) return "⬜";
+  return num % 2 === 0 ? "🟦" : "⬜";
+}
+
 class MaxBotService {
   /**
    * @param {{
@@ -1988,8 +1999,8 @@ class MaxBotService {
       const start = prettyTime(startRaw);
       const end = prettyTime(endRaw);
       return [
-        `${lesson.lessonNumber}. ${start} - ${end}`,
-        `${lesson.subject} (${room})`,
+        `${pairMarker(lesson.lessonNumber)} ${lesson.lessonNumber}. ${start} - ${end}`,
+        `${lesson.subject} (${formatRoomMarkdown(room)})`,
         teacher
       ].join("\n");
     });
@@ -2081,7 +2092,7 @@ class MaxBotService {
       `${toRuDate(nextLesson.date)}, пара ${nextLesson.lessonNumber}`,
       `Время начала: ${this.getLessonStartTime(nextLesson.lessonNumber)}`,
       nextLesson.subject,
-      `Аудитория: ${nextLesson.room || "-"}`,
+      `Аудитория: ${formatRoomMarkdown(nextLesson.room || "-")}`,
       `Преподаватель: ${nextLesson.teacher || "-"}`
     ].join("\n");
 
@@ -2222,7 +2233,7 @@ class MaxBotService {
         const [startRaw, endRaw] = lessonTime.split(" - ");
         const start = prettyTime(startRaw);
         const end = prettyTime(endRaw);
-        blocks.push(`${lessonNumber}. ${start} - ${end}\nПары нет`);
+        blocks.push(`${pairMarker(lessonNumber)} ${lessonNumber}. ${start} - ${end}\nПары нет`);
         continue;
       }
 
@@ -2233,8 +2244,10 @@ class MaxBotService {
         const [startRaw, endRaw] = lessonTime.split(" - ");
         const start = prettyTime(startRaw);
         const end = prettyTime(endRaw);
-        const location = cleanText([group, room !== "-" ? room : ""].filter(Boolean).join(" ")) || room;
-        blocks.push([`${lesson.lessonNumber}. ${start} - ${end}`, location, lesson.subject].join("\n"));
+        const location = cleanText(
+          [group, room !== "-" ? formatRoomMarkdown(room) : ""].filter(Boolean).join(" ")
+        ) || room;
+        blocks.push([`${pairMarker(lesson.lessonNumber)} ${lesson.lessonNumber}. ${start} - ${end}`, location, lesson.subject].join("\n"));
       });
     }
 
@@ -2325,7 +2338,7 @@ class MaxBotService {
       `Время начала: ${this.getLessonStartTime(nextLesson.lessonNumber)}`,
       nextLesson.subject,
       `Группа: ${nextLesson.groupName || "-"}`,
-      `Аудитория: ${nextLesson.room || "-"}`,
+      `Аудитория: ${formatRoomMarkdown(nextLesson.room || "-")}`,
       `Всего пар в этот день: ${dayLessonsCount}`
     ].join("\n");
 
