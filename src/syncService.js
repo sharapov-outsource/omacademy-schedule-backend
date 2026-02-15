@@ -96,9 +96,22 @@ class SyncService {
       const groupsPayload = await this.scraper.fetchGroups();
       const { groups, sourceUpdatedAt } = groupsPayload;
 
-      // Parse every group page, then atomically publish a new active snapshot.
-      const { groups: normalizedGroups, lessons } = await this.scraper.fetchAllLessons(groups);
-      const teachers = await this.buildTeachersSnapshot(lessons);
+      // Parse every group page, then enrich with teacher-page-only lessons/events.
+      const { groups: normalizedGroups, lessons: groupLessons } = await this.scraper.fetchAllLessons(groups);
+      let teachersDirectory = [];
+      let teacherLessons = [];
+      try {
+        const teachersPayload = await this.scraper.fetchTeachers();
+        teachersDirectory = teachersPayload.teachers || [];
+        const teacherLessonsPayload = await this.scraper.fetchAllTeacherLessons(teachersDirectory);
+        teacherLessons = teacherLessonsPayload.lessons || [];
+      } catch (error) {
+        this.logger.warn("Teacher pages fetch failed, continuing with group lessons only", {
+          error: error.message
+        });
+      }
+      const lessons = [...groupLessons, ...teacherLessons];
+      const teachers = await this.buildTeachersSnapshot(lessons, teachersDirectory);
 
       await this.repository.saveSnapshot({
         syncId,
@@ -119,6 +132,7 @@ class SyncService {
         groupsCount: normalizedGroups.length,
         teachersCount: teachers.length,
         lessonsCount: lessons.length,
+        teacherLessonsCount: teacherLessons.length,
         sourceUpdatedAt,
         cleanup
       };
@@ -128,6 +142,7 @@ class SyncService {
         groupsCount: result.groupsCount,
         teachersCount: result.teachersCount,
         lessonsCount: result.lessonsCount,
+        teacherLessonsCount: result.teacherLessonsCount,
         sourceUpdatedAt: sourceUpdatedAt ? new Date(sourceUpdatedAt) : null
       });
 
@@ -158,29 +173,22 @@ class SyncService {
    * Build teacher snapshot from source list and fallback values from parsed lessons.
    *
    * @param {Array<Record<string, any>>} lessons
+   * @param {Array<Record<string, any>>} sourceTeachers
    * @returns {Promise<Array<Record<string, any>>>}
    */
-  async buildTeachersSnapshot(lessons) {
+  async buildTeachersSnapshot(lessons, sourceTeachers = []) {
     const map = new Map();
 
-    try {
-      const payload = await this.scraper.fetchTeachers();
-      payload.teachers.forEach((teacher) => {
-        const key = `cp:${teacher.code}`;
-        map.set(key, {
-          key,
-          code: teacher.code,
-          name: teacher.name,
-          href: teacher.href,
-          url: teacher.url
-        });
+    sourceTeachers.forEach((teacher) => {
+      const key = `cp:${teacher.code}`;
+      map.set(key, {
+        key,
+        code: teacher.code,
+        name: teacher.name,
+        href: teacher.href,
+        url: teacher.url
       });
-    } catch (error) {
-      // Teacher list should not block sync, because lessons already include teacher names.
-      this.logger.warn("Teacher list fetch failed, using lessons fallback", {
-        error: error.message
-      });
-    }
+    });
 
     lessons.forEach((lesson) => {
       const teacherName = String(lesson.teacher || "").trim();

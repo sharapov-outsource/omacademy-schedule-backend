@@ -2056,8 +2056,9 @@ class MaxBotService {
       const date = String(lesson.date || "");
       const lessonNumber = Number.parseInt(lesson.lessonNumber, 10);
       const room = String(lesson.room || "-");
-      const key = `${date}|${lessonNumber}|${room}`;
-      const groupLabel = String(lesson.groupName || lesson.groupCode || "-");
+      const subjectKey = String(lesson.subject || "").toLowerCase();
+      const key = `${date}|${lessonNumber}|${room}|${subjectKey}`;
+      const groupLabel = String(lesson.groupName || "");
       const subjectLabel = String(lesson.subject || "");
 
       if (!buckets.has(key)) {
@@ -2081,7 +2082,7 @@ class MaxBotService {
 
         return {
           ...lesson,
-          groupName: groupsList.length ? groupsList.join(" ") : lesson.groupName || lesson.groupCode || "-",
+          groupName: groupsList.length ? groupsList.join(" ") : lesson.groupName || null,
           subject: subjectsList.length > 1 ? subjectsList.join(" / ") : lesson.subject
         };
       })
@@ -2113,19 +2114,43 @@ class MaxBotService {
         return (a.groupName || "").localeCompare(b.groupName || "", "ru");
       });
 
-    const blocks = sorted.map((lesson) => {
-      const room = lesson.room || "-";
-      const group = lesson.groupName || lesson.groupCode || "-";
-      const lessonTime = this.getLessonTimeRange(lesson.lessonNumber);
-      const [startRaw, endRaw] = lessonTime.split(" - ");
-      const start = prettyTime(startRaw);
-      const end = prettyTime(endRaw);
-      return [
-        `${lesson.lessonNumber}. ${start} - ${end}`,
-        `${lesson.subject} (${room})`,
-        group
-      ].join("\n");
+    const byLessonNumber = new Map();
+    sorted.forEach((lesson) => {
+      const lessonNumber = Number.parseInt(lesson.lessonNumber, 10);
+      if (!Number.isFinite(lessonNumber)) return;
+      const list = byLessonNumber.get(lessonNumber) || [];
+      list.push(lesson);
+      byLessonNumber.set(lessonNumber, list);
     });
+
+    const numbers = Array.from(byLessonNumber.keys()).sort((a, b) => a - b);
+    if (!numbers.length) return `${header}\n\nПар не найдено.`;
+
+    const blocks = [];
+    const minLesson = numbers[0];
+    const maxLesson = numbers[numbers.length - 1];
+
+    for (let lessonNumber = minLesson; lessonNumber <= maxLesson; lessonNumber += 1) {
+      const rows = byLessonNumber.get(lessonNumber) || [];
+      if (!rows.length) {
+        const lessonTime = this.getLessonTimeRange(lessonNumber);
+        const [startRaw, endRaw] = lessonTime.split(" - ");
+        const start = prettyTime(startRaw);
+        const end = prettyTime(endRaw);
+        blocks.push(`${lessonNumber}. ${start} - ${end}\nПары нет`);
+        continue;
+      }
+
+      rows.forEach((lesson) => {
+        const room = lesson.room || "-";
+        const group = lesson.groupName || "-";
+        const lessonTime = this.getLessonTimeRange(lesson.lessonNumber);
+        const [startRaw, endRaw] = lessonTime.split(" - ");
+        const start = prettyTime(startRaw);
+        const end = prettyTime(endRaw);
+        blocks.push([`${lesson.lessonNumber}. ${start} - ${end}`, `${lesson.subject} (${room})`, group].join("\n"));
+      });
+    }
 
     return `${header}\n\n${blocks.join("\n\n")}`;
   }
@@ -2213,7 +2238,7 @@ class MaxBotService {
       `${toRuDate(nextLesson.date)}, пара ${nextLesson.lessonNumber}`,
       `Время начала: ${this.getLessonStartTime(nextLesson.lessonNumber)}`,
       nextLesson.subject,
-      `Группа: ${nextLesson.groupName || nextLesson.groupCode || "-"}`,
+      `Группа: ${nextLesson.groupName || "-"}`,
       `Аудитория: ${nextLesson.room || "-"}`,
       `Всего пар в этот день: ${dayLessonsCount}`
     ].join("\n");

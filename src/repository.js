@@ -235,7 +235,11 @@ class ScheduleRepository {
     const query = { syncId: meta.activeSyncId };
 
     // Exact-match filters for predictable API behavior.
-    if (filters.group) query.groupName = filters.group;
+    if (filters.group) {
+      query.groupName = filters.group;
+      // Exclude synthetic teacher-page rows from group queries.
+      query.groupCode = { $not: /^tp:/ };
+    }
     if (filters.groupCode) query.groupCode = String(filters.groupCode);
     if (filters.date) query.date = filters.date;
     if (filters.teacher) query.teacher = filters.teacher;

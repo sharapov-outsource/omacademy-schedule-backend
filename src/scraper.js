@@ -23,6 +23,11 @@ function parseRuDateTime(value) {
   return `${yyyy}-${mm}-${dd}T${hh}:${min}:00+06:00`;
 }
 
+function makeSyntheticGroupCode(groupName, teacherCode, columnIndex) {
+  if (groupName) return `tp:${groupName}`;
+  return `tp:${teacherCode || "unknown"}:${columnIndex}`;
+}
+
 function mapLimit(items, limit, iterator) {
   if (!Array.isArray(items) || items.length === 0) return Promise.resolve([]);
 
@@ -225,6 +230,23 @@ class OmAcademyScraper {
   }
 
   /**
+   * Extract subject text from a lesson cell, with fallback for plain-text cells
+   * (e.g., events like "Совещание" without anchor tags).
+   *
+   * @param {import("cheerio").CheerioAPI} $
+   * @param {import("cheerio").Cheerio<any>} td
+   * @returns {string}
+   */
+  extractSubjectFromCell($, td) {
+    const byAnchor = cleanText(td.find("a.z1").first().text());
+    if (byAnchor) return byAnchor;
+
+    const cloned = td.clone();
+    cloned.find("a.z2, a.z3, a.z4").remove();
+    return cleanText(cloned.text());
+  }
+
+  /**
    * Parse all lesson rows for a single group page (`cgXXX.htm`).
    *
    * @param {{code: string, name: string, href: string}} group
@@ -271,7 +293,7 @@ class OmAcademyScraper {
         // "nul" means an empty slot with no lesson data.
         if (td.hasClass("nul")) return;
 
-        const subject = cleanText(td.find("a.z1").first().text());
+        const subject = this.extractSubjectFromCell($, td);
         const room = cleanText(td.find("a.z2").first().text());
         const teacher = cleanText(td.find("a.z3").first().text());
 
@@ -302,6 +324,82 @@ class OmAcademyScraper {
   }
 
   /**
+   * Parse all lesson rows for a single teacher page (`cpXXX.htm`).
+   *
+   * @param {{code: string, name: string, href: string}} teacher
+   * @returns {Promise<{teacher: ScraperTeacher, lessons: ScraperLesson[]}>}
+   */
+  async fetchTeacherLessons(teacher) {
+    const { html, url } = await this.fetchHtml(teacher.href);
+    const $ = cheerio.load(html);
+
+    const title = cleanText($("h1").first().text());
+    const titleMatch = title.match(/^Преподаватель:\s*(.+)$/i);
+    const pageTeacherName = titleMatch ? cleanText(titleMatch[1]) : teacher.name;
+
+    let currentDate = null;
+    let currentDayLabel = null;
+    const lessons = [];
+
+    $("table.inf tr").each((_, tr) => {
+      const cells = $(tr).find("td");
+      if (!cells.length) return;
+
+      let offset = 0;
+      const firstCellHtml = $(cells[0]).html() || "";
+      const parsed = this.parseDayCellHtml(firstCellHtml);
+      if (parsed.date) {
+        currentDate = parsed.date;
+        currentDayLabel = parsed.dayLabel;
+        offset = 1;
+      }
+
+      const pairCell = cells[offset];
+      if (!pairCell) return;
+      const lessonNumber = Number.parseInt(cleanText($(pairCell).text()), 10);
+      if (!Number.isFinite(lessonNumber)) return;
+
+      const lessonCells = [];
+      for (let i = offset + 1; i < cells.length; i += 1) {
+        lessonCells.push(cells[i]);
+      }
+
+      lessonCells.forEach((lessonCell, idx) => {
+        const td = $(lessonCell);
+        if (td.hasClass("nul")) return;
+
+        const subject = this.extractSubjectFromCell($, td);
+        const room = cleanText(td.find("a.z2").first().text());
+        const groupName = cleanText(td.find("a.z3").first().text()) || cleanText(td.find("a.z4").first().text());
+        const columnIndex = idx + 1;
+
+        if (!subject || !currentDate) return;
+
+        lessons.push({
+          groupCode: makeSyntheticGroupCode(groupName || null, teacher.code, columnIndex),
+          groupName: groupName || null,
+          date: currentDate,
+          dayLabel: currentDayLabel,
+          lessonNumber,
+          columnIndex,
+          subject,
+          room: room || null,
+          teacher: pageTeacherName || teacher.name || null,
+          sourceUrl: url
+        });
+      });
+    });
+
+    return {
+      teacher: {
+        ...teacher,
+        name: pageTeacherName
+      },
+      lessons
+    };
+  }
+
+  /**
    * Parse lessons for all groups with bounded concurrency.
    *
    * @param {ScraperGroup[]} groups
@@ -323,6 +421,37 @@ class OmAcademyScraper {
     });
 
     return { groups: normalizedGroups, lessons };
+  }
+
+  /**
+   * Parse lessons for all teachers with bounded concurrency.
+   * Errors on individual teacher pages are skipped.
+   *
+   * @param {ScraperTeacher[]} teachers
+   * @returns {Promise<{teachers: ScraperTeacher[], lessons: ScraperLesson[]}>}
+   */
+  async fetchAllTeacherLessons(teachers) {
+    const chunks = await mapLimit(
+      teachers,
+      this.maxConcurrentRequests,
+      async (teacher) => {
+        try {
+          return await this.fetchTeacherLessons(teacher);
+        } catch (error) {
+          return { teacher, lessons: [] };
+        }
+      }
+    );
+
+    const normalizedTeachers = [];
+    const lessons = [];
+
+    chunks.forEach((chunk) => {
+      normalizedTeachers.push(chunk.teacher);
+      lessons.push(...chunk.lessons);
+    });
+
+    return { teachers: normalizedTeachers, lessons };
   }
 }
 
