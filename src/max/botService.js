@@ -357,6 +357,8 @@ class MaxBotService {
     this.adminUserIds = new Set((adminUserIds || []).map((id) => String(id)));
     this.lastSenderByTarget = new Map();
     this.pendingByTarget = new Map();
+    this.datePickerSessionByUser = new Map();
+    this.handledCallbackIds = new Map();
 
     this.api = new MaxApiClient({ token, apiBaseUrl, timeoutMs });
     this.userPrefsRepository = new MaxUserPrefsRepository(db);
@@ -766,6 +768,13 @@ class MaxBotService {
     const callbackId = update?.callback?.callback_id || update?.callback_id;
     if (!callbackId) return;
 
+    this.cleanupHandledCallbacks();
+    if (this.handledCallbackIds.has(String(callbackId))) {
+      await this.safeAnswerCallback(callbackId, "Уже обработано");
+      return;
+    }
+    this.handledCallbackIds.set(String(callbackId), Date.now());
+
     const target = this.resolveTarget(update);
     const targetKey = this.targetKey(target);
     const callbackSenderId =
@@ -946,15 +955,23 @@ class MaxBotService {
    * @returns {Promise<void>}
    */
   async handleDatePickFromCallback(target, senderId, payload) {
-    const [isoDateRaw, senderToken] = String(payload || "").split(":");
+    const [isoDateRaw, senderToken, sessionIdRaw] = String(payload || "").split(":");
     const isoDate = String(isoDateRaw || "").trim();
     const senderFromToken = decodeToken(senderToken);
     const effectiveSenderId = senderFromToken || senderId;
+    const sessionId = String(sessionIdRaw || "").trim();
 
     if (!isIsoDate(isoDate)) {
       await this.sendText(target, "Некорректная дата. Попробуйте открыть выбор даты заново.");
       return;
     }
+
+    const session = this.datePickerSessionByUser.get(effectiveSenderId);
+    if (!session || !sessionId || session.sessionId !== sessionId) {
+      await this.sendText(target, "Эта кнопка устарела. Нажмите `Выбор даты` и выберите снова.");
+      return;
+    }
+    this.datePickerSessionByUser.delete(effectiveSenderId);
 
     const role = await this.getUserRole(effectiveSenderId);
     if (!role) {
@@ -1356,6 +1373,12 @@ class MaxBotService {
 
     const list = dates;
     const senderToken = encodeToken(senderId);
+    const sessionId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    this.datePickerSessionByUser.set(senderId, {
+      sessionId,
+      updatedAt: Date.now()
+    });
+    this.cleanupDatePickerSessions();
     const buttons = [];
 
     for (let index = 0; index < list.length; index += 2) {
@@ -1365,13 +1388,13 @@ class MaxBotService {
       row.push({
         type: "callback",
         text: toRuDate(first),
-        payload: `cmd:datepick:${first}:${senderToken}`
+        payload: `cmd:datepick:${first}:${senderToken}:${sessionId}`
       });
       if (second) {
         row.push({
           type: "callback",
           text: toRuDate(second),
-          payload: `cmd:datepick:${second}:${senderToken}`
+          payload: `cmd:datepick:${second}:${senderToken}:${sessionId}`
         });
       }
       buttons.push(row);
@@ -1384,6 +1407,36 @@ class MaxBotService {
       noMenu: true,
       senderId
     });
+  }
+
+  /**
+   * Cleanup old date-picker sessions (TTL: 20 minutes).
+   *
+   * @returns {void}
+   */
+  cleanupDatePickerSessions() {
+    const ttlMs = 20 * 60 * 1000;
+    const now = Date.now();
+    for (const [userId, value] of this.datePickerSessionByUser.entries()) {
+      if (!value?.updatedAt || now - value.updatedAt > ttlMs) {
+        this.datePickerSessionByUser.delete(userId);
+      }
+    }
+  }
+
+  /**
+   * Cleanup handled callback ids (TTL: 10 minutes).
+   *
+   * @returns {void}
+   */
+  cleanupHandledCallbacks() {
+    const ttlMs = 10 * 60 * 1000;
+    const now = Date.now();
+    for (const [callbackId, seenAt] of this.handledCallbackIds.entries()) {
+      if (!seenAt || now - seenAt > ttlMs) {
+        this.handledCallbackIds.delete(callbackId);
+      }
+    }
   }
 
   /**
